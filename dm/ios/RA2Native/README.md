@@ -16,6 +16,13 @@ toolkit. Compile its `gdidc.c` and `kernel32.c` **instead of** those two toolkit
 files, and also compile `IOSPlatform.m` with ARC and Foundation/CoreText.
 All other HLE source files remain unchanged.
 
+`MainBridge.c` supplies the native entry symbol while the reviewed desktop
+entry is renamed to `ra2_desktop_main`. It checks the UIKit main thread,
+arguments, and configured writable settings directory, and calls
+`SDL_SetMainReady` before the engine. It rejects the desktop recorder's
+subprocess option. This is an entry guard, not the complete TonTon lifecycle
+or save-file integration.
+
 The font adapter asks CoreText for a readable system font file, preserving
 game-registered fonts. It supports Latin Windows-family substitution and a
 Chinese fallback without spawning `fc-match`, downloading fonts, or copying

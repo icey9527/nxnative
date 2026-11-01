@@ -15,6 +15,10 @@ const char *ra2_ios_font_file(const char *face, int bold, int italic);
 int ra2_ios_set_user_directory(const char *directory, char *error, size_t capacity);
 int ra2_ios_settings_executable_path(char *out, size_t capacity);
 
+/* Guarded native entry bridge. The host must bind the matching game framework
+ * and configure UserData first. This function can enter the actual game. */
+int TonTonRedAlertMain(int argc, char **argv);
+
 #ifdef __cplusplus
 }
 #endif
