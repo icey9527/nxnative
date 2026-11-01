@@ -9,6 +9,7 @@
 #ifdef DM_LIBRARY_HOST
 #include "game_profile_runtime.h"
 #include "dmsh_chain.h"
+#import "LibraryAvailability.h"
 // The library picks a card before the game front end is created. The standalone
 // Swift launcher is per IPA and has no active game until that selection.
 bool dm_show_launcher(void *view_controller, void (*done)(void)) {
@@ -104,53 +105,20 @@ static UIImage *coverForGame(NSDictionary *g){
     }
     return nil;
 }
-#ifdef DM_LIBRARY_HOST
-static NSString *resourceRootForTitle(NSString *gamesRoot, NSString *title){
-    NSFileManager *fm=NSFileManager.defaultManager;
-    NSString *documents=[[gamesRoot stringByAppendingPathComponent:title] stringByAppendingPathComponent:@"Resources"];
-    NSString *bundled=[[[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"GameResources"] stringByAppendingPathComponent:title] stringByStandardizingPath];
-    for(NSString *candidate in @[documents,bundled]){
-        BOOL isDir=NO;
-        if([fm fileExistsAtPath:[candidate stringByAppendingPathComponent:@"dm/shader_map.tsv"]] &&
-           [fm fileExistsAtPath:[candidate stringByAppendingPathComponent:@"msl"] isDirectory:&isDir]&&isDir)
-            return candidate;
-    }
-    return nil;
-}
-#endif
 static NSSet<NSString *> *availableGames(NSArray<NSDictionary *> *catalog){
 #ifdef DM_LIBRARY_HOST
     NSString *doc=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     NSString *root=[doc stringByAppendingPathComponent:@"Games"];
+    NSString *bundled=[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"GameResources"];
     NSMutableSet<NSString *> *result=[NSMutableSet set];
+    NSMutableDictionary *report=[NSMutableDictionary dictionary];
     for(NSDictionary *g in catalog){
-        NSString *title=g[@"id"];
-        const dm_game_profile *profile=dm_profile_find(title.UTF8String);
-        if(!profile)continue;
-        NSString *resources=resourceRootForTitle(root,title);
-        if(!resources)continue;
-        NSString *tables=[resources stringByAppendingPathComponent:@"dm"];
-        NSString *chain=[resources stringByAppendingPathComponent:[NSString stringWithFormat:@"msl/b-%s",DMSH_CHAIN]];
-        NSString *stamp=[NSString stringWithContentsOfFile:[chain stringByAppendingPathComponent:@"inputs.tsv"] encoding:NSUTF8StringEncoding error:nil];
-        NSString *gameRow=[NSString stringWithFormat:@"game\t%@",title.uppercaseString];
-        if(![[stamp componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet] containsObject:gameRow])continue;
-        BOOL isDir=NO;
-        NSString *user=[[root stringByAppendingPathComponent:title] stringByAppendingPathComponent:@"UserData"];
-        BOOL bundled=[resources hasPrefix:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"GameResources/"]];
-        BOOL userIsDir=NO;
-        BOOL haveUser=[NSFileManager.defaultManager fileExistsAtPath:user isDirectory:&userIsDir]&&userIsDir;
-        NSString *marker=[NSString stringWithUTF8String:profile->romfs_marker];
-        BOOL romfs=[NSFileManager.defaultManager fileExistsAtPath:[resources stringByAppendingPathComponent:@"romfs.img"]] ||
-            [NSFileManager.defaultManager fileExistsAtPath:[user stringByAppendingPathComponent:@"romfs.img"]] ||
-            [NSFileManager.defaultManager fileExistsAtPath:[[resources stringByAppendingPathComponent:@"romfs"] stringByAppendingPathComponent:marker]] ||
-            [NSFileManager.defaultManager fileExistsAtPath:[[user stringByAppendingPathComponent:@"romfs"] stringByAppendingPathComponent:marker]];
-        if((bundled||haveUser)&&
-           [NSFileManager.defaultManager fileExistsAtPath:tables isDirectory:&isDir]&&isDir&&
-           [NSFileManager.defaultManager fileExistsAtPath:[resources stringByAppendingPathComponent:@"msl"] isDirectory:&isDir]&&isDir&&
-           [NSFileManager.defaultManager fileExistsAtPath:[tables stringByAppendingPathComponent:@"shader_map.tsv"]]&&
-           romfs)
-            [result addObject:bundleForGame(g)];
+        NSDictionary *status=TonTonGameReadiness(g[@"id"],root,bundled);
+        report[g[@"id"]]=status;
+        if([status[@"ready"] boolValue])[result addObject:bundleForGame(g)];
     }
+    NSData *data=[NSJSONSerialization dataWithJSONObject:@{@"version":[NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"]?:@"",@"games":report} options:NSJSONWritingPrettyPrinted error:nil];
+    [data writeToFile:[doc stringByAppendingPathComponent:@"LibraryAvailability.json"] options:NSDataWritingAtomic error:nil];
     return result;
 #else
     return NXInstalledGames();
@@ -322,7 +290,19 @@ UILayoutGuide *safe=self.view.safeAreaLayoutGuide;
 - (NSInteger)collectionView:(UICollectionView *)v numberOfItemsInSection:(NSInteger)s{(void)v;(void)s;return self.displayGames.count;}
 - (UICollectionViewCell *)collectionView:(UICollectionView *)v cellForItemAtIndexPath:(NSIndexPath *)p{CoverCard *c=(CoverCard *)[v dequeueReusableCellWithReuseIdentifier:@"card" forIndexPath:p];NSDictionary *g=self.displayGames[p.item];NSString *b=bundleForGame(g);BOOL installed=[self.installed containsObject:b];c.art.image=coverForGame(g);c.placeholder.text=g[@"name"];c.placeholder.hidden=c.art.image!=nil;c.art.backgroundColor=C(37,48,66);c.title.text=g[@"name"];c.sizeLabel.text=[NSString stringWithFormat:@"%@  ·  %@",g[@"size"],g[@"version"]];c.badge.text=installed?@"▶":@"…";c.badge.backgroundColor=installed?[UIColor colorWithWhite:0 alpha:0.72]:[UIColor colorWithWhite:0 alpha:0.45];c.badge.textColor=UIColor.whiteColor;return c;}
 - (CGSize)collectionView:(UICollectionView *)v layout:(UICollectionViewLayout *)l sizeForItemAtIndexPath:(NSIndexPath *)p{(void)l;(void)p;CGFloat w=v.bounds.size.width;NSInteger n=w>=700?4:w>=500?3:2;NSInteger rows=(self.displayGames.count+n-1)/n;CGFloat byWidth=floor((w-(n-1)*15)/n);CGFloat byHeight=rows==2?floor((v.bounds.size.height-4-68-10)/2-60):300;CGFloat side=MIN(300,MIN(byWidth,MAX(120,byHeight)));return CGSizeMake(side,side+60);}
-- (void)collectionView:(UICollectionView *)v didSelectItemAtIndexPath:(NSIndexPath *)p{(void)v;NSDictionary *g=self.displayGames[p.item];NSString *b=bundleForGame(g);if(![self.installed containsObject:b]){if([g[@"pending"] boolValue])[self showNotice:@"文件已加入" detail:@"游戏文件已移入游戏匣。程序转换完成并更新游戏匣后才能打开。"];else [self showNotice:@"等待整合" detail:@"这款游戏已登记；程序和资源完成整合后才能从这里启动。原游戏和存档会保留到新版本可用。"] ;return;}
+- (void)collectionView:(UICollectionView *)v didSelectItemAtIndexPath:(NSIndexPath *)p{(void)v;NSDictionary *g=self.displayGames[p.item];NSString *b=bundleForGame(g);
+#ifdef DM_LIBRARY_HOST
+    // A transfer may have finished since refresh, or an old refresh may still be
+    // queued. Validate the selected cartridge now, rather than trusting a UI set.
+    NSSet *current=availableGames(@[g]);
+    if(![current containsObject:b]){
+        NSString *doc=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+        NSDictionary *status=TonTonGameReadiness(g[@"id"],[doc stringByAppendingPathComponent:@"Games"],[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"GameResources"]);
+        [self showNotice:@"卡带尚未就绪" detail:status[@"detail"]];return;
+    }
+#else
+    if(![self.installed containsObject:b]){[self showNotice:@"卡带尚未就绪" detail:@"这款游戏的程序或资源尚未完成整合。"];return;}
+#endif
 #ifdef DM_LIBRARY_HOST
     if(self.startGame)self.startGame(g[@"id"]);
 #else
