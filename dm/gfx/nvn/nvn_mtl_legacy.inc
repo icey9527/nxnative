@@ -4229,6 +4229,7 @@ static size_t arena_alloc(size_t n, __strong id<MTLBuffer> *buf) {
 // ---------- Draw state ----------
 static struct {
     const prog_t *prog;
+    const prog_t *cprog; // NVN compute binding is independent of graphics stages.
     const prog_t *bst[5];      // program bound per stage (NVN stage bits 1 vertex 2 fragment 4 geometry 8 / 16 tessellation, indices as in NvProg.sh), see bind_stages
     blend_st blend[8]; color_st color; chmask_st chmask; ms_st ms; poly_st poly; ds_st ds;
     va_st attr[16]; int nattr; vs_st stream[16]; int nstream;
@@ -4325,7 +4326,6 @@ static void udc_note_draw(NvProg *pr) {
 // When every stage comes from the same program, that program is the effective one (all of Mario's and Engage's binds are like this, so nothing changes for them); otherwise a composite is made: a host-made prog_t carrying only a serial, whose NvProg in the serial table takes each stage from its source program (a null fragment = a vertex-only pipeline)
 static const prog_t *bind_stages(const prog_t *p, int stages) {
     for (int st = 0; st < 5; st++) if (stages >> st & 1) S.bst[st] = p;
-    if (stages & 0x20) return p;   // compute: replaced as a whole as before
     const prog_t *v = S.bst[0];
     if (!v) return NULL;
     int same = 1; for (int st = 1; st < 5; st++) if (S.bst[st] && S.bst[st] != v) same = 0;
@@ -6073,7 +6073,11 @@ static int state_op(uint32_t op, const void *a) {
         case OP_SET_SAMP_POOL: { int base = nvn_dpool_base(((const p_set_pool *)a)->pool, 0);
             if (base != S.samp_base) { S.samp_base = base; args_dirty_all(); } break; }
         case OP_SCISSOR: R.sc = *(const p_scissor *)a; R.has_sc = 1; break;
-        case OP_BIND_PROGRAM: { const p_bind_program *bp_ = a; const prog_t *np = bind_stages(bp_->prog, bp_->stages); if (np != S.prog) { S.prog = np; g_pso_dirty = 1; args_dirty_all(); } break; }
+        case OP_BIND_PROGRAM: { const p_bind_program *bp_ = a;
+            // Upstream 8b21049d: clearing compute must not unbind graphics.
+            if ((bp_->stages & 0x20) && bp_->prog != S.cprog) { S.cprog = bp_->prog; args_dirty_all(); }
+            if (bp_->stages & 0x1f) { const prog_t *np = bind_stages(bp_->prog, bp_->stages & 0x1f); if (np != S.prog) { S.prog = np; g_pso_dirty = 1; args_dirty_all(); } }
+            break; }
         case OP_BIND_STATE: {
             const p_bind_state *b = a; void *dst = NULL; size_t n = 0;
             blend_st bs;
@@ -6337,7 +6341,7 @@ static int sdx_bucket(uint64_t ser, int add) {   // Returns the bucket number; r
 }
 static const uint8_t **g_sdx_op; static uint32_t g_sdx_nop, g_sdx_opcap;
 static uint32_t g_exec_seq;   // Sequence number of the current operation during replay
-static uint64_t g_pp_slot[6][NTEX + 32]; static const prog_t *g_pp_prog; static const p_set_rt *g_pp_rt; static uint32_t g_pp_rtseq;
+static uint64_t g_pp_slot[6][NTEX + 32]; static const prog_t *g_pp_prog, *g_pp_cprog; static const p_set_rt *g_pp_rt; static uint32_t g_pp_rtseq;
 static uint32_t *g_rtx_seq, *g_drx_seq; static uint32_t g_rtx_n, g_rtx_cap, g_drx_n, g_drx_cap;   // This submit's SET_RT / draw sequence number tables (used by the pre-screen of the readable tile merge)
 static void seq_push(uint32_t **v, uint32_t *n, uint32_t *cap, uint32_t x) { if (*n == *cap) { *cap = *cap ? *cap * 2 : 1024; *v = realloc(*v, *cap * sizeof **v); } (*v)[(*n)++] = x; }
 static void sdx_ev_add(sdx_ev e) { if (sdx_bucket(e.ser, 0) < 0) return; if (g_sdx_n == g_sdx_cap) { g_sdx_cap = g_sdx_cap ? g_sdx_cap * 2 : 4096; g_sdx = realloc(g_sdx, g_sdx_cap * sizeof *g_sdx); g_sdx_tmp = realloc(g_sdx_tmp, g_sdx_cap * sizeof *g_sdx); } g_sdx[g_sdx_n++] = e; }
@@ -6370,10 +6374,10 @@ static void sdx_walk(const uint8_t *p, int depth) {
             case OP_BIND_TEX: case OP_BIND_TEX1: case OP_BIND_IMG: { p_bind_handles one; const p_bind_handles *b = bind_rec(h.op, a, &one); bh_fresh(b); int base = h.op == OP_BIND_IMG ? NTEX : 0, lim = h.op == OP_BIND_IMG ? 32 : NTEX;
                 if (b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) g_pp_slot[b->stage][base + b->first + k] = h_ser(b->h[k]);
                 break; }
-            case OP_BIND_PROGRAM: g_pp_prog = ((const p_bind_program *)a)->prog; break;
+            case OP_BIND_PROGRAM: { const p_bind_program *bp_ = a; if (bp_->stages & 0x20) g_pp_cprog = bp_->prog; if (bp_->stages & 0x1f) g_pp_prog = bp_->prog; break; }
             case OP_DRAW: case OP_DRAW_IDX: case OP_DISPATCH: {
                 if (h.op != OP_DISPATCH) seq_push(&g_drx_seq, &g_drx_n, &g_drx_cap, seq);
-                __unsafe_unretained NvProg *pr = g_pp_prog ? prog_get(g_pp_prog) : nil;
+                const prog_t *pp = h.op == OP_DISPATCH ? g_pp_cprog : g_pp_prog; __unsafe_unretained NvProg *pr = pp ? prog_get(pp) : nil;
                 if (!pr) { for (int st = 0; st < 6; st++) for (int k = 0; k < NTEX + 32; k++) if (g_pp_slot[st][k]) sdx_ev_add((sdx_ev){seq, 0, g_pp_slot[st][k], p, 0, 0, SDX_READ, 0, 0, 1}); }
                 else for (int st = 0; st < 6; st++) { __unsafe_unretained NvShader *sh = pr->sh[st]; if (!sh || (h.op == OP_DISPATCH) != (st == 5)) continue;
                     for (int i = 0; i < sh->rf.nb; i++) { const nvn_rbind *b = &sh->rf.b[i]; int k = b->kind == NVN_RB_IMG ? NTEX + b->reg : (b->kind == NVN_RB_TEX || b->kind == NVN_RB_TBUF) ? b->reg : -1;
@@ -6400,7 +6404,7 @@ void mtl_sub_index(const uint64_t *h, int n) {   // Start of submit (hle_nvn.c Q
     memset(g_sdx_hk, 0, sizeof g_sdx_hk); g_sdx_nb = 0;
     for (int i = 0; i < g_xv_n; i++) sdx_bucket(g_xv[i].ser, 1);   // Textures in the ledger enter the candidate set: otherwise, when one is only sampled and not used as an attachment in this submit, its read events are not indexed and the fallback cannot see them
     if (R.has_rt) { for (int k = 0; k < R.rt.n && k < 8; k++) if (R.rt.color[k]) sdx_bucket(R.rt.color[k]->serial, 1); if (R.rt.depth) sdx_bucket(R.rt.depth->serial, 1); }   // The targets at the start of the submit (the first draw may reopen the render pass without going through SetRenderTargets)
-    g_pp_prog = S.prog; g_pp_rt = NULL; g_pp_rtseq = SDX_NONE;
+    g_pp_prog = S.prog; g_pp_cprog = S.cprog; g_pp_rt = NULL; g_pp_rtseq = SDX_NONE;
     for (int st = 0; st < 6; st++) { for (int k = 0; k < NTEX; k++) g_pp_slot[st][k] = S.tex[st][k] ? h_ser(S.tex[st][k]) : 0;
                                      for (int k = 0; k < 32; k++) g_pp_slot[st][NTEX + k] = S.img[st][k] ? h_ser(S.img[st][k]) : 0; }
     for (int i = 0; i < n && g_sdx_ok; i++) sdx_walk((const uint8_t *)h[i], 0);
@@ -6755,7 +6759,7 @@ static void defer_try(const p_draw *dw, const p_draw_idx *di) {
             case OP_END: { const uint8_t *nx = defer_cont(&ci); if (!nx) { g_defer.reason = 1; goto fail; } p = nx; continue; }
             case OP_CALL: g_defer.reason = 2; goto fail;
             case OP_JUMP: memcpy(&p, a, 8); continue;
-            case OP_BIND_PROGRAM: pg = ((const p_bind_program *)a)->prog; break;
+            case OP_BIND_PROGRAM: if (((const p_bind_program *)a)->stages & 0x1f) pg = ((const p_bind_program *)a)->prog; break;
             case OP_BIND_TEX: case OP_BIND_TEX1: case OP_BIND_IMG: { p_bind_handles one; const p_bind_handles *b = bind_rec(h.op, a, &one); bh_fresh(b); int lim = h.op == OP_BIND_IMG ? 32 : NTEX;
                 if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (h.op == OP_BIND_IMG) img[b->stage][b->first + k] = b->h[k]; else tex[b->stage][b->first + k] = b->h[k]; } break; }
             case OP_BIND_STATE: { const p_bind_state *b = a; if (b->kind == 5) memcpy(&ds, b->bytes, sizeof ds); break; }
@@ -6811,7 +6815,7 @@ q_found:
         if (!q_body && h.op == OP_SET_RT && !q_clears) { const p_set_rt *r2 = a; if (!defer_q_superset(r2)) { g_defer.reason = 15; goto fail; } q = r2; qop = p; p += h.size; continue; }
         if (h.op == OP_CLEAR_COLOR || h.op == OP_CLEAR_DS) q_clears = 1;
         if (!q_body && (h.op == OP_END || h.op == OP_SET_RT || h.op == OP_UPDATE_UB || h.op == OP_COPY_B2B || h.op == OP_CLEAR_BUF || h.op == OP_DISPATCH)) { g_defer.reason = 9; g_defer.reason_op = h.op; goto fail; }
-        if (h.op == OP_BIND_PROGRAM) pg = ((const p_bind_program *)a)->prog; else if (h.op == OP_BIND_TEX || h.op == OP_BIND_TEX1 || h.op == OP_BIND_IMG) { p_bind_handles one; const p_bind_handles *b = bind_rec(h.op, a, &one); bh_fresh(b); int lim = h.op == OP_BIND_IMG ? 32 : NTEX; if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (h.op == OP_BIND_IMG) img[b->stage][b->first + k] = b->h[k]; else tex[b->stage][b->first + k] = b->h[k]; } }
+        if (h.op == OP_BIND_PROGRAM && (((const p_bind_program *)a)->stages & 0x1f)) pg = ((const p_bind_program *)a)->prog; else if (h.op == OP_BIND_TEX || h.op == OP_BIND_TEX1 || h.op == OP_BIND_IMG) { p_bind_handles one; const p_bind_handles *b = bind_rec(h.op, a, &one); bh_fresh(b); int lim = h.op == OP_BIND_IMG ? 32 : NTEX; if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (h.op == OP_BIND_IMG) img[b->stage][b->first + k] = b->h[k]; else tex[b->stage][b->first + k] = b->h[k]; } }
         else if (h.op == OP_CLEAR_COLOR) { const p_clear_color *c = a; if (c->index >= 0 && c->index < q->n && q->color[c->index]) for (int i = 0; i < g_defer.p_rt.n; i++) if (g_defer.p_rt.color[i] && sub_eq(q, c->index, &g_defer.p_rt, i)) { g_defer.reason = 10; goto fail; } }
         p += h.size;
     }
@@ -6918,7 +6922,7 @@ static void fuse_try(void) {
             const uint8_t *q; op_hdr hq; const void *aq;
             if (!fz_next(&cur, &q, &hq, &aq)) return;
             if (q == r2op) goto planned;
-            if (hq.op == OP_BIND_PROGRAM) pg = ((const p_bind_program *)aq)->prog;
+            if (hq.op == OP_BIND_PROGRAM && (((const p_bind_program *)aq)->stages & 0x1f)) pg = ((const p_bind_program *)aq)->prog;
             else if (hq.op == OP_BIND_STATE) { const p_bind_state *b = aq; if (b->kind == 5) memcpy(&ds, b->bytes, sizeof ds); }
             else if (hq.op == OP_BIND_TEX || hq.op == OP_BIND_TEX1 || hq.op == OP_BIND_IMG) { p_bind_handles one; const p_bind_handles *b = bind_rec(hq.op, aq, &one); bh_fresh(b); int lim = hq.op == OP_BIND_IMG ? 32 : NTEX;
                 if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (hq.op == OP_BIND_IMG) img[b->stage][b->first + k] = b->h[k]; else tex[b->stage][b->first + k] = b->h[k]; } }
@@ -6930,7 +6934,7 @@ planned:
         const prog_t *pg2 = S.prog; static uint64_t t2[6][NTEX], i2[6][32]; memcpy(t2, S.tex, sizeof t2); memcpy(i2, S.img, sizeof i2);
         cur = (fz_cursor){.p = g_exec_next};
         for (;;) { const uint8_t *q; op_hdr hq; const void *aq; if (!fz_next(&cur, &q, &hq, &aq)) return; if (q == p) break;
-            if (hq.op == OP_BIND_PROGRAM) pg2 = ((const p_bind_program *)aq)->prog;
+            if (hq.op == OP_BIND_PROGRAM && (((const p_bind_program *)aq)->stages & 0x1f)) pg2 = ((const p_bind_program *)aq)->prog;
             else if (hq.op == OP_BIND_TEX || hq.op == OP_BIND_TEX1 || hq.op == OP_BIND_IMG) { p_bind_handles one; const p_bind_handles *b = bind_rec(hq.op, aq, &one); bh_fresh(b); int lim = hq.op == OP_BIND_IMG ? 32 : NTEX;
                 if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (hq.op == OP_BIND_IMG) i2[b->stage][b->first + k] = b->h[k]; else t2[b->stage][b->first + k] = b->h[k]; } }
         }
@@ -8296,8 +8300,8 @@ static id<MTLComputePipelineState> compute_pipeline(NvShader *cs, id<MTLFunction
 }
 static void dispatch(const p_dispatch *dp) {
     zskip_clear();
-    if (!S.prog) { RED_ONCE(27, "compute dispatch has no bound program"); return; }
-    NvProg *pr = prog_get(S.prog);
+    if (!S.cprog) { RED_ONCE(27, "compute dispatch has no bound program"); return; }
+    NvProg *pr = prog_get(S.cprog);
     NvShader *cs = pr->sh[5];
     if (!cs) { RED_ONCE(28, "dispatched program has no mapped compute shader"); return; }
     int min_cs = min_reduction_candidate(cs);
