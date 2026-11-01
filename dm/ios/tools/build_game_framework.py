@@ -6,18 +6,104 @@ fork's signed __TEXT layout and shader chain, rather than relabelling newer
 upstream output. Game assets and saves stay outside the framework.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import plistlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[3]
 TOOLS = Path(__file__).resolve().parent
+
+
+def host_sections(path):
+    """Read bounded arm64 sections without executing or changing the old host."""
+    total = path.stat().st_size
+    with path.open('rb') as f:
+        header = f.read(32)
+        if len(header) != 32 or struct.unpack_from('<I', header)[0] != 0xfeedfacf:
+            raise ValueError('reference host must be a thin 64-bit Mach-O')
+        if struct.unpack_from('<I', header, 4)[0] != 0x100000c:
+            raise ValueError('reference host must be arm64')
+        count, length = struct.unpack_from('<II', header, 16)
+        if length > total - 32 or length > 16 << 20 or count > length // 8:
+            raise ValueError('invalid reference load commands')
+        commands = f.read(length)
+    at, sections = 0, {}
+    for _ in range(count):
+        if at + 8 > length:
+            raise ValueError('truncated reference load command')
+        cmd, size = struct.unpack_from('<II', commands, at)
+        if size < 8 or at + size > length:
+            raise ValueError('invalid reference load command size')
+        if cmd == 0x19:
+            if size < 72:
+                raise ValueError('truncated reference segment')
+            nsect = struct.unpack_from('<I', commands, at + 64)[0]
+            if 72 + nsect * 80 > size:
+                raise ValueError('truncated reference section table')
+            for i in range(nsect):
+                p = at + 72 + i * 80
+                name = commands[p:p+16].split(b'\0')[0].decode('ascii')
+                segment = commands[p+16:p+32].split(b'\0')[0].decode('ascii')
+                size_, offset = struct.unpack_from('<QI', commands, p + 40)
+                kind = struct.unpack_from('<I', commands, p + 64)[0] & 0xff
+                if kind in (1, 0xc, 0x12):
+                    continue  # S_ZEROFILL, S_GB_ZEROFILL, S_THREAD_LOCAL_ZEROFILL
+                if offset > total or size_ > total - offset:
+                    raise ValueError('reference section extends beyond the file')
+                if size_ and offset < 32 + length:
+                    raise ValueError('reference section overlaps load commands')
+                if (segment, name) in sections:
+                    raise ValueError('duplicate reference section')
+                sections[segment, name] = (offset, size_)
+        at += size
+    if at != length:
+        raise ValueError('reference load command count and size disagree')
+    return sections
+
+
+def reference_assembly(reference, namespace, modules, output):
+    if not re.fullmatch(r'[A-Za-z0-9]{2}', namespace or ''):
+        raise ValueError('reference-host requires a two-character namespace')
+    sections = host_sections(reference)
+    lines, flags, proof = [], ['-Wl,-segprot,__TEXT,rwx,rx'], []
+    for module in modules:
+        for old, new in [(('__TEXT', '__dm'+namespace+module+'img'), ('__TEXT', '__dm'+module+'img')),
+                         (('__DM'+namespace+module+'W', '__img'), ('__DM'+module+'W', '__img'))]:
+            if old not in sections or any(len(s) > 16 for s in new):
+                raise ValueError(f'missing or unsupported reference module {old}')
+            offset, length = sections[old]
+            if not length or length % 0x4000:
+                raise ValueError('reference guest section must have complete 16K pages')
+            # .incbin the original signed bytes, including its original holes
+            # and padding. Do not regenerate code from a mutable build folder.
+            source = str(reference)
+            if any(c in source for c in '\n\r"\\'):
+                raise ValueError('reference path is unsafe for assembly')
+            lines += [f'    .section {new[0]},{new[1]}', '    .p2align 14',
+                      f'    .incbin "{source}", {offset:#x}, {length:#x}', '    .p2align 14']
+            with reference.open('rb') as f:
+                f.seek(offset)
+                digest = hashlib.sha256()
+                left = length
+                while left:
+                    block = f.read(min(left, 4 << 20))
+                    if not block:
+                        raise ValueError('reference section truncated during read')
+                    digest.update(block)
+                    left -= len(block)
+            proof.append(dict(module=module, segment=old[0], section=old[1],
+                              bytes=length, sha256=digest.hexdigest()))
+        flags.append(f'-Wl,-segprot,__DM{module}W,rw,rw')
+    output.write_text('\n'.join(lines)+'\n')
+    return flags, proof
 
 
 def build(args):
@@ -50,8 +136,15 @@ def build(args):
         fw = work / name
         (fw / 'dm').mkdir(parents=True)
         asm = work / 'embed.S'
-        flags = subprocess.check_output([sys.executable, str(TOOLS / 'gen_embed.py'),
-                                         str(patched), str(asm), *args.modules], text=True).split()
+        reference_proof = None
+        if args.reference_host:
+            flags, reference_proof = reference_assembly(args.reference_host.resolve(strict=True),
+                                                        args.namespace, args.modules, asm)
+        else:
+            if args.namespace:
+                raise ValueError('namespace is only used with reference-host')
+            flags = subprocess.check_output([sys.executable, str(TOOLS / 'gen_embed.py'),
+                                             str(patched), str(asm), *args.modules], text=True).split()
         marker = work / 'marker.c'
         marker.write_text('__attribute__((visibility("default"),used)) const unsigned char dm_game_image_marker = 1;\n')
         sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
@@ -68,6 +161,12 @@ def build(args):
                         modules=args.modules, nro_count=0, chain='b-' + chain, loader='FR',
                         framework=name, framework_executable='DmGame', image_marker='dm_game_image_marker',
                         min_os=args.min_os, tonton_host_abi='tonton-signed-text-v1')
+        if reference_proof:
+            manifest['reference_code_sections'] = reference_proof
+            # A mutable patched folder is not proof of the live CPU tables.
+            # A device migration must bind/read back its tables before signing
+            # and explicitly clear this gate. Merely extracting code is unsafe.
+            manifest['unbound_resource_tables'] = True
         (fw / 'game.manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
         (fw / 'Info.plist').write_bytes(plistlib.dumps(dict(CFBundleExecutable='DmGame',
             CFBundleIdentifier='com.tonytan.game.' + title.lower(), CFBundlePackageType='FMWK',
@@ -86,6 +185,9 @@ def main():
     ap.add_argument('--patched', type=Path, required=True)
     ap.add_argument('--output', type=Path, required=True)
     ap.add_argument('--modules', nargs='+', required=True)
+    ap.add_argument('--reference-host', type=Path,
+                    help='migrate exact signed guest sections from an existing combined host')
+    ap.add_argument('--namespace', help='original two-character embedded namespace')
     ap.add_argument('--name')
     ap.add_argument('--min-os', default='16.1')
     ap.add_argument('--display-version', default='')

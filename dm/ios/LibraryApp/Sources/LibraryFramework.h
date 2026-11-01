@@ -14,6 +14,8 @@ static NSString *TonTonFrameworkProblem(NSDictionary *manifest, NSString *title,
                                        NSArray<NSString *> *modules, NSString *os) {
     if (![manifest isKindOfClass:NSDictionary.class] || ![manifest[@"schema"] isEqual:@1])
         return @"游戏程序的清单缺失或格式不支持。";
+    if ([manifest[@"unbound_resource_tables"] boolValue])
+        return @"这款卡带还没有匹配当前资源的模块表，未启动。";
     if (![manifest[@"title_id"] isEqual:title.uppercaseString] ||
         ![manifest[@"modules"] isEqual:modules] || !modules.count)
         return @"游戏程序与所选卡带不匹配。";

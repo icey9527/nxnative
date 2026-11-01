@@ -26,6 +26,10 @@ int main(){@autoreleasepool{
     assert(!TonTonFrameworkProblem(good,titleID,mods,@"16.1"));
     assert(TonTonFrameworkProblem(good,titleID,mods,@"16.0"));
     assert(TonTonFrameworkProblem(nil,titleID,mods,@"27.0"));
+    NSMutableDictionary *unbound=good.mutableCopy;unbound[@"unbound_resource_tables"]=@YES;
+    assert(TonTonFrameworkProblem(unbound,titleID,mods,@"27.0"));
+    unbound[@"unbound_resource_tables"]=@NO;
+    assert(!TonTonFrameworkProblem(unbound,titleID,mods,@"27.0"));
     for(NSString *key in good){
         NSMutableDictionary *bad=good.mutableCopy;[bad removeObjectForKey:key];
         assert(TonTonFrameworkProblem(bad,titleID,mods,@"27.0"));
@@ -40,7 +44,7 @@ int main(){@autoreleasepool{
     for(id version in @[@"",@"16..1",@".16",@"16.",@"16.1.0.0",@"16.x",@16]){
         NSMutableDictionary *bad=good.mutableCopy;bad[@"min_os"]=version;
         assert(TonTonFrameworkProblem(bad,titleID,mods,@"27.0"));}
-    puts("33 framework identity checks passed");
+    puts("35 framework identity checks passed");
 }}
 '''
         with tempfile.TemporaryDirectory() as d:
