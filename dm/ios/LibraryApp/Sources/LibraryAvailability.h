@@ -1,6 +1,12 @@
 #import <Foundation/Foundation.h>
 #include "game_profile_runtime.h"
 #include "dmsh_chain.h"
+#ifdef DM_WEB_RUNTIME
+#import "../../Engines/TonTonWebRuntime.h"
+#endif
+#ifdef DM_GTA_NATIVE
+#import "TonTonGTAV.h"
+#endif
 
 // A missing UserData directory is normal for a newly imported cartridge:
 // library_slot_paths creates it before boot. Never require an existing save.
@@ -15,6 +21,20 @@ static BOOL TonTonDirectory(NSString *path) {
 }
 static NSDictionary *TonTonGameReadiness(NSString *titleID, NSString *gamesRoot, NSString *bundledRoot) {
     NSString *title = titleID.lowercaseString;
+#ifdef DM_WEB_RUNTIME
+    if ([title isEqual:@"redalert2"]) {
+        BOOL ready=TonTonWebRuntimeAvailable(title,[gamesRoot stringByAppendingPathComponent:title]);
+        return @{@"ready":@(ready),@"code":ready?@"experimental_runtime":@"game_data_incomplete",
+                 @"detail":ready?@"实验运行：完整版资源已导入，Wine 兼容仍在修复。":@"红警完整版资源或运行层尚未传入。"};
+    }
+#endif
+#ifdef DM_GTA_NATIVE
+    if ([title isEqual:@"gta5"]) {
+        BOOL ready=TonTonGTAVAvailable([gamesRoot stringByAppendingPathComponent:title]);
+        return @{@"ready":@(ready),@"code":ready?@"ready":@"game_data_incomplete",
+                 @"detail":ready?@"可以打开":@"GTA5 的完整数据和着色器尚未传入。"};
+    }
+#endif
     const dm_game_profile *profile = dm_profile_find(title.UTF8String);
     NSString *code = nil, *detail = nil, *resourceRoot = nil;
     if (!profile) {

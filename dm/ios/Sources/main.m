@@ -1,3 +1,6 @@
+#ifdef DM_GTA_NATIVE
+#import "TonTonGTAV.h"
+#endif
 // iOS App entry: set the environment (game files, saves, shader libraries), write the host log to Documents/log.txt, create the window (front_ios.m), then run the host's dm_main on a big-stack thread.
 // The game files (RomFS) ship inside the App at <App>/romfs; Documents/romfs.img (one image, scripts/push_romfs.sh) or a Documents/romfs folder is also accepted (lets you swap them without reinstalling).
 #import <UIKit/UIKit.h>
@@ -14,6 +17,9 @@
 #ifdef DM_LIBRARY_HOST
 #import "../LibraryApp/Sources/LibraryRoot.h"
 #import "../LibraryApp/Sources/LibraryFramework.h"
+#ifdef DM_WEB_RUNTIME
+#import "../Engines/TonTonWebRuntime.h"
+#endif
 #endif
 
 extern char **environ;
@@ -240,6 +246,22 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
     self.window.rootViewController=TonTonLibraryController(^(NSString *titleID){
         SceneDelegate *owner=weakSelf;
         if(!owner||g_boot_ok)return;
+#ifdef DM_WEB_RUNTIME
+        if([titleID isEqual:@"redalert2"]){
+            NSString *documents=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+            UIViewController *game=TonTonWebRuntimeController(titleID,[documents stringByAppendingPathComponent:@"Games/redalert2"]);
+            if(game){g_boot_ok=1;owner.window.rootViewController=game;}
+            return;
+        }
+#endif
+#ifdef DM_GTA_NATIVE
+        if([titleID isEqual:@"gta5"]){
+            NSString *documents=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+            UIViewController *game=TonTonGTAVCreateController([documents stringByAppendingPathComponent:@"Games/gta5"]);
+            if(game){g_boot_ok=1;owner.window.rootViewController=game;}
+            return;
+        }
+#endif
         setenv("DM_LIBRARY_GAME_ID",titleID.UTF8String,1);
         if(!boot_env()){
             UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"卡带暂时无法启动" message:@"请检查该游戏的资源是否已完整移入游戏匣。" preferredStyle:UIAlertControllerStyleAlert];
@@ -254,10 +276,26 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
 #endif
     [self.window makeKeyAndVisible];
 }
-- (void)sceneWillResignActive:(UIScene *)s { front_ios_focus_event(0); }
-- (void)sceneDidEnterBackground:(UIScene *)s { front_ios_focus_event(1); }
-- (void)sceneWillEnterForeground:(UIScene *)s { front_ios_focus_event(2); }
-- (void)sceneDidBecomeActive:(UIScene *)s { front_ios_focus_event(3); }
+- (void)sceneWillResignActive:(UIScene *)s {
+#ifdef DM_GTA_NATIVE
+    if(TonTonGTAVIsActive()){TonTonGTAVFocus(0,0);return;}
+#endif
+ front_ios_focus_event(0); }
+- (void)sceneDidEnterBackground:(UIScene *)s {
+#ifdef DM_GTA_NATIVE
+    if(TonTonGTAVIsActive()){TonTonGTAVFocus(0,1);return;}
+#endif
+ front_ios_focus_event(1); }
+- (void)sceneWillEnterForeground:(UIScene *)s {
+#ifdef DM_GTA_NATIVE
+    if(TonTonGTAVIsActive()){TonTonGTAVFocus(0,0);return;}
+#endif
+ front_ios_focus_event(2); }
+- (void)sceneDidBecomeActive:(UIScene *)s {
+#ifdef DM_GTA_NATIVE
+    if(TonTonGTAVIsActive()){TonTonGTAVFocus(1,0);return;}
+#endif
+ front_ios_focus_event(3); }
 @end
 
 int main(int argc, char **argv) {

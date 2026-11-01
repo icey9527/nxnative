@@ -1,0 +1,71 @@
+# Engines in the unified library
+
+TonTon is one application, with per-cartridge runtime selection. A shared UI
+does not make different instruction sets, graphics APIs or memory requirements
+interchangeable. Game data and saves belong to each `Documents/Games/<id>` slot.
+Executable Nintendo code belongs to signed frameworks in the application bundle,
+never to Documents. New code modules require an application update.
+
+## Nintendo code frameworks
+
+`tools/build_game_framework.py` builds this fork's signed-text ABI using its
+actual shader chain. When migrating an existing combined application, use
+`--reference-host OLD_EXECUTABLE --namespace XX` to preserve its exact code/data
+pages, including padding. Rebuilding from a mutable patched directory is not
+evidence of equality to an installed application. Bind all four CPU tables for
+every module to the live cartridge resources before signing; an unbound manifest
+is deliberately rejected. Preserve the per-device tables and saves.
+
+The old GPU backend and modern backend remain distinct capabilities within the
+same source branch. Do not relabel a shader cache or lower a plist deployment
+version to manufacture support.
+
+## Optional GTA runtime
+
+`GTAV/TonTonGTAV.m` adapts the MIT `kalki-kgp/gtav-native` UIKit host. Define
+`DM_GTA_NATIVE`, include its host headers, link the separately built `libgta.a`
+and Dawn libraries, and compile the adapter in the unified host target. Those
+inputs and the user's game files are not in this repository. The current Dawn
+build requires iOS 17; the adapter rejects earlier systems. The iOS 16 native
+Metal route needs a real renderer/BC texture fallback port, not a plist edit.
+The current adapter does not implement MetalFX upscaling or frame generation.
+
+## Optional Red Alert runtime
+
+Define `DM_WEB_RUNTIME`, compile `TonTonWebRuntime.m`, link WebKit, and bundle
+the official BoxedWine browser runtime under `Runtimes/RedAlert2`. Include its
+GPL license and corresponding source reference (https://github.com/danoon2/Boxedwine).
+No third-party runtime binary or commercial asset is checked into this tree.
+The user's full game ZIP goes in `redalert2/Resources/ra2-ea-full.zip`.
+
+The WebKit runtime uses a loopback-only HTTP origin with streaming/range support
+and a persistent data store. The fixed origin preserves Wine's browser storage
+between launches. It records JS exceptions and process termination under the
+slot's `UserData/Logs`. This is an experimental integration: the current Wine 11
+COM/RpcSs startup exception is unresolved. Bundling it does not establish that
+campaigns, cutscenes, audio, saves or touch controls work on iOS.
+
+## Switch 2 intake foundation
+
+`tools/inspect_nintendo_dump.py DUMP --expect switch2` inspects the upstream
+`base/exefs`, `base/romfs`, `updates/<decimal-version>`, and DLC layout without
+changing any input. Updates must contain the full patched RomFS, not a patch
+overlay. NPDM program IDs must match. A readable SDK `spec: Ounce` marker
+identifies Switch 2; compressed/unrecognized SDKs remain unknown until extracted.
+Encrypted NSPs still require the existing extraction step.
+
+The tool reports `inspected_not_compiled` and never marks device compatibility
+verified. The iOS fork does not yet integrate the NVN2 backend. Pokémon and Mario
+Kart inputs have not been supplied; no title IDs, memory budgets or compatibility
+claims are invented for them. Latest upstream evidence is the Donkey Kong Bananza
+Mac profile, not an iOS result:
+https://github.com/seedds/nxnative/tree/cd859c38a8f8890ddbb57a23d6f45e23ba9e6651/dm/games/040074A01BF12000
+
+## Upstream review before changes
+
+Before each source-change batch, read `git ls-remote upstream refs/heads/main`
+and inspect relevant changes in an isolated checkout. Record the upstream SHA
+and the actual fixes considered. Bring compatible fixes into
+`ios16-pokemon-za-port` with their tests and preserve platform support. This is
+a read-only check and selective integration workflow; it does not restart the
+cancelled recurring upstream rebase or overwrite user work.
