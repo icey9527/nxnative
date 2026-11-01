@@ -50,3 +50,38 @@ The corrected range adapter also completed the real BoxedWine non-game
 The probe observed an HTTP 206 read and exit marker 0, with no browser exception.
 The generic Wine harness still timed out waiting for its separate test-summary
 format; this is dependency-command evidence, not a complete passing Wine suite.
+
+
+## Optional scalar JIT candidate
+
+The M2 user confirmed that the bounded-reader interpreter build opens the game,
+but reported severe lag. Its live log contains main-loop stalls and roughly
+70–95 million interpreted guest instructions per second. MIPS is not game FPS;
+this is evidence to investigate CPU translation and presentation, not a measured
+frame-rate improvement.
+
+`tools/prepare_boxedwine_scalar_jit.py` applies the accompanying GPL-compatible
+patch to the exact upstream revision above. Build with
+`BOXEDWINE_WASM_JIT_SCALAR_ONLY` as well as `BOXEDWINE_WASM_JIT`, no `-msimd128`,
+no tail-call compiler flag, and legacy Wasm exception encoding. Use a separate
+build directory so the working interpreter remains available. Retain the bounded
+archive adapter, shell environment parser repair, stable HTTP origin and Wine
+persistent storage when packaging the candidate.
+
+MMX/SSE and extended-state instructions call the existing interpreter and leave
+the compiled activation. Integer string instructions use the existing scalar REP
+implementations, including overlap, direction, flags and fault behavior. Disable
+XMM preloads in cold memory paths and vector-containing register regions. Merely
+removing `-msimd128` or changing vector-local types is insufficient: generated JIT
+modules can still contain vector operations even when the host Wasm passes its
+static feature audit. The first two candidates exposed exactly that error and
+were rejected without device installation.
+
+The corrected candidate passed 1537 non-game CPU checks (integer arithmetic,
+carry, REP copy, mixed SSE/MMX and x87 state) and actual Wine COM registration/query
+in desktop Chrome, without JIT module compile errors. The test source is
+`dm/ios/tests/boxedwine_scalar_cpu_probe.c`. This is a narrow correctness check,
+not the complete upstream CPU suite, and is not iPad gameplay or a performance
+benchmark. Do not claim a frame-rate gain before measuring the installed runtime
+on the target device. Bundle this patch, upstream revision, build flags, GPL
+license and corresponding-source link with any distributed candidate.
