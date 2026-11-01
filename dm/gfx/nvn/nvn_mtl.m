@@ -6445,6 +6445,23 @@ static uint32_t g_dispatch_dim[3];   // the current dispatch's workgroup counts 
 static uint32_t g_draw_binst;   // the current draw's base instance (draw), for c0 + 0x644
 static __unsafe_unretained id<MTLBuffer> g_c0_dim_buf; static size_t g_c0_dim_off;   // where encode_args put them for this dispatch (nil: the shader reads no c0); an indirect dispatch copies its GPU-written counts there
 static uint64_t g_geo_bind[5];
+// Resolving a sampled view may upgrade its storage and encode a copy. Do it
+// before choosing an encoder: an upgrade closes the render pass and can reuse
+// the encoder object for compute, invalidating a borrowed render pointer.
+static void prepare_argument_textures(NvShader *sh, int stage) {
+    if (!sh) return;
+    os_unfair_lock_lock(&g_rmu);
+    for (int i = 0; i < sh->rf.nb; i++) {
+        const nvn_rbind *b = &sh->rf.b[i]; int reg = b->reg, tid = 0;
+        if (b->kind == NVN_RB_TEXU) tid = (int)(ubo_handle(stage, reg, b->off) & 0xfffff);
+        else if (b->kind == NVN_RB_TEX || b->kind == NVN_RB_TBUF)
+            tid = reg < NTEX ? (int)(S.tex[stage][reg] & 0xfffff) : 0;
+        else if (b->kind == NVN_RB_IMG || b->kind == NVN_RB_IMGA)
+            tid = reg < 32 ? (int)(S.img[stage][reg] & 0xfffff) : 0;
+        if (tid) (void)tex_fast(tid);
+    }
+    os_unfair_lock_unlock(&g_rmu);
+}
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex);
 static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) { AP_B; int r = encode_args_(en, sh, nvn_stage, metal_vertex); AP_E(3); return r; }
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) {
@@ -8848,6 +8865,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     g_mdxc.next = NULL;
     if (!S.prog) { RED_ONCE(18, "no program bound before the draw"); PD("Z %llu draw skipped: no program bound", g_stat_pass + !g_enc); return; }
     __unsafe_unretained NvProg *pr = g_geo_program ? g_geo_program : prog_get(S.prog);
+    for (int stage = 0; stage < 5; stage++) prepare_argument_textures(pr->sh[stage], stage);
     image_prepare(pr, 0x1f);
     draw_gs_check(pr);   // a geometry stage left with no function (see prog_fold_gs)
     if (S.rast_discard && S.tf_on) { tf_draw(pr, dw, di); return; }
@@ -9242,6 +9260,7 @@ static void dispatch(const p_dispatch *dp) {
     if (!tg[0]) { RED_ONCE(29, "compute shader lacks threadgroup size reflection"); return; }
     if (g_nubd && ubd_conflict_cs(cs, dp->ind)) { g_ubd_conflicts++; ubd_land(); }   // see ubd_conflict_cs
     rp_end();
+    prepare_argument_textures(cs, 5);
     image_prepare(prog_get(S.cprog), 0x20);
     int own = dispatch_own();
     if (own && g_blit) { enc_b_end(g_blit); g_blit = nil; }

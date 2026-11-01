@@ -91,8 +91,38 @@ static void image_case(int tid) {
     for (int i = 0; i < 8; i++) CHECK(abs((int)px[i] - (int[4]){64, 128, 191, 32}[i % 4]) <= 1, "the image write is stored as written");
     read_check(tid, view, (const float[8]){px[0]/255.f, px[1]/255.f, px[2]/255.f, 1, px[4]/255.f, px[5]/255.f, px[6]/255.f, 1}, 0.001f);
 }
+// A cold format view must finish its storage copy before selecting the next
+// render encoder. A warm argument lookup must leave that encoder alive.
+static void argument_prepare_case(int tid, unsigned kind) {
+    tex_t t = {.magic=MAGIC('T','E','X',0), .serial=110000+(unsigned)tid};
+    t.d = (nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D, .format=NVN_FORMAT_RGBA8UI, .width=8, .height=8, .depth=1, .levels=1, .samples=1};
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Uint width:8 height:8 mipmapped:NO];
+    d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+    id<MTLTexture> base = [g_dev newTextureWithDescriptor:d];
+    serial_put(t.serial, base);
+    view_t v = {.set_format=1, .format=NVN_FORMAT_RGBA8};
+    mtl_reg_tex(tid, &t, &v);
+    NvShader *sh = [NvShader new]; sh->rf.nb=1;
+    sh->rf.b[0] = (nvn_rbind){.kind=kind, .reg=0};
+    S.tex[0][0]=tid; S.img[0][0]=tid;
+    mtl_sub_begin();
+    prepare_argument_textures(sh, 0);
+    CHECK(tex_get(t.serial) != base, "cold view upgraded storage before draw");
+    rp_end(); if (g_blit) { enc_b_end(g_blit); g_blit=nil; }
+    R.has_rt=1; R.rt.n=1; R.rt.color[0]=&t;
+    id<MTL4RenderCommandEncoder> en=rp_begin_ex(0);
+    CHECK(en != nil, "render pass opens after upgrade");
+    os_unfair_lock_lock(&g_rmu); (void)tex_fast(tid); os_unfair_lock_unlock(&g_rmu);
+    CHECK(g_enc == en, "argument lookup keeps chosen render encoder alive");
+    mtl_sub_commit(); mtl_drain();
+    R.has_rt=0; R.rt.color[0]=NULL;
+}
 int main(void) { @autoreleasepool {
     mtl_init();
+    argument_prepare_case(900, NVN_RB_TEX);
+    argument_prepare_case(901, NVN_RB_TBUF);
+    argument_prepare_case(902, NVN_RB_IMG);
+    argument_prepare_case(903, NVN_RB_IMGA);
     uint16_t pixels[2] = {0x001f, 0xf800};
     uint8_t rgb1[4] = {NVN_SWZ_R, NVN_SWZ_G, NVN_SWZ_B, NVN_SWZ_ONE};
     uint8_t map[4] = {NVN_SWZ_B, NVN_SWZ_R, NVN_SWZ_ONE, NVN_SWZ_ZERO};

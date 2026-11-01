@@ -94,3 +94,27 @@ python3 dm/ios/tools/export_sampler_limit_sources.py \
 ```
 
 The Tier 1 runtime verifies the chain, proof kind, source, base-library and reflection hashes, removes the same authorized binding from its private argument-encoder reflection, and compiles the companion with invariant preservation and fast math disabled. Tier 2 devices continue to load the original metallib. The profile-screen shader's unused sampler at argument ID 36 is reduced from 17 to 16 while all 32 `read()` calls through its texture remain unchanged. Eight focused exporter tests, the existing iOS compatibility tests, 21 related exporter tests, `git diff --check` and an unsigned A10 Release host build pass. This is source and package validation only; the unsigned build still requires user sideloading and real-device confirmation.
+
+## Unified Air Metal 4 resource checkpoint (2026-10-31)
+
+An Air NFS run terminated with `NSInvalidArgumentException`: an indexed draw was
+sent to `AGXG18PFamilyComputeContext_mtlnext`. A cold sampled format view upgraded
+RGBA8Uint storage to permit RGBA8Unorm views during argument encoding, closing
+the render pass after its encoder had been borrowed. The modern renderer now
+prepares shader-visible textures before selecting the render/compute encoder,
+as the compatibility renderer already does. The production view regression
+includes this exact format pair and validates encoder survival for sampled,
+typed-buffer and image bindings: 215 checks pass with Metal validation on M4.
+The complete Air host Release build also passes. Gameplay remains user-tested.
+
+The Arceus Air resource set contained `aa3ec7536a84d1e3_b` with a legacy atomic
+shadow buffer at argument 5 and a buffer-29 parameter. The modern host does not
+implement that ABI (runtime reported binding kind 19). Do not reuse this legacy
+primary library in a modern host. `prepare_modern_atomics.py CACHE LIBRARIES
+OVERLAY` verifies the original source hash and native reflection, then compiles
+native Metal 3.1 atomics for iOS 26+. Apply its `.json`/`.metallib` overlay only
+to the modern device's resource set; retain the legacy resource set for older
+GPUs. No shader-chain or inputs stamp is changed. The Arceus original source
+hash and resulting iOS library were verified; this does not establish the cause
+of every mid-game exit. Four older logs now survive repeated app launches in
+`UserData/Logs` in addition to the current and previous logs.

@@ -116,7 +116,21 @@ static int boot_env(void) {
     }
     // Log: the host only writes to stderr; redirect it to Documents/log.txt (the previous one is kept as log.prev.txt), retrieve it from the Files app when something goes wrong
     NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *prev = [doc stringByAppendingPathComponent:@"log.prev.txt"];
-    [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:log toPath:prev error:nil];
+    // Keep a bounded history across repeated launches: the report being
+    // investigated must survive the player's attempts to reopen the game.
+    NSString *history = [doc stringByAppendingPathComponent:@"Logs"];
+    [fm createDirectoryAtPath:history withIntermediateDirectories:YES attributes:nil error:nil];
+    if ([fm fileExistsAtPath:prev]) {
+        NSString *last = [history stringByAppendingPathComponent:@"previous-4.txt"];
+        [fm removeItemAtPath:last error:nil];
+        for (int i = 3; i >= 1; i--) {
+            NSString *a = [history stringByAppendingPathComponent:[NSString stringWithFormat:@"previous-%d.txt", i]];
+            NSString *b = [history stringByAppendingPathComponent:[NSString stringWithFormat:@"previous-%d.txt", i + 1]];
+            [fm moveItemAtPath:a toPath:b error:nil];
+        }
+        [fm moveItemAtPath:prev toPath:[history stringByAppendingPathComponent:@"previous-1.txt"] error:nil];
+    }
+    [fm moveItemAtPath:log toPath:prev error:nil];
     if (freopen(log.fileSystemRepresentation, "w", stderr)) setvbuf(stderr, NULL, _IOLBF, 0);
     else NSLog(@"[RED] boot: cannot open Documents log (errno %d)", errno);
     NSLog(@"boot: Documents writable=%d", [fm isWritableFileAtPath:doc]);
