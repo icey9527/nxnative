@@ -28,3 +28,25 @@ back; ten save files and 84 CPU tables stayed unchanged. No commercial game was
 automatically launched. These checks do not establish campaign playability or
 interpreter performance; those remain user tests. The official Wine test harness
 did not produce a unit-test summary, so its timeout is not a passing Wine suite.
+
+An actual M2 startup log then showed `RangeError: Out of memory` before the Wine
+command, while the browser loaded the 1.83 GB game ZIP. The native route now sets
+`app-range=true`: `prepare_boxedwine_range.py` adds a read-only Emscripten file
+backed by exact HTTP 206 byte ranges instead of downloading the whole archive
+into MEMFS. Its LRU holds three 1 MiB blocks. The adapter obtains the node using
+`FS.lookupPath`; Emscripten 4's `createDataFile` returns void. It preserves normal
+seek/size behavior, rejects writes and mmap, and fails closed on truncated or
+incorrect range responses. The normal native local HTTP server serves the data;
+no sandbox permission change is involved.
+
+Node regression checks cover binary bytes, cross-block reads, EOF, cache reuse,
+read bounds and malformed server responses. An isolated browser also exercised
+real synchronous HTTP range requests. These checks do not establish iOS Wine
+startup or game playability. Keep the WebKit runtime logs after user launches so
+the next initialization failure can be distinguished from the archive OOM.
+
+The corrected range adapter also completed the real BoxedWine non-game
+`cmd.exe` COM registration/query sequence with the official Wine11 v24 root.
+The probe observed an HTTP 206 read and exit marker 0, with no browser exception.
+The generic Wine harness still timed out waiting for its separate test-summary
+format; this is dependency-command evidence, not a complete passing Wine suite.
