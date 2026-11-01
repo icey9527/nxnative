@@ -1,0 +1,149 @@
+#pragma once
+#import <Foundation/Foundation.h>
+#import <CommonCrypto/CommonDigest.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+
+// Run only inside the library app's own Documents directory. The device
+// service can deliver verified chunks without acquiring write access to the
+// app's output file; the app then imports them with its normal sandbox rights.
+// This handles data only. Executable frameworks are never imported here.
+static BOOL TTImportMatch(NSString *text, NSString *pattern) {
+    return [text isKindOfClass:NSString.class] &&
+        [text rangeOfString:pattern options:NSRegularExpressionSearch].length==text.length && text.length;
+}
+static NSString *TTImportDigest(CC_SHA256_CTX *context) {
+    unsigned char bytes[CC_SHA256_DIGEST_LENGTH];CC_SHA256_Final(bytes,context);
+    NSMutableString *hex=[NSMutableString new];
+    for(unsigned i=0;i<sizeof(bytes);i++)[hex appendFormat:@"%02x",bytes[i]];
+    return hex;
+}
+static BOOL TTImportRegular(NSString *path) {
+    return [[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil][NSFileType] isEqual:NSFileTypeRegular];
+}
+static void TTImportRequire(BOOL condition,NSString *reason) {
+    if(!condition)@throw [NSException exceptionWithName:@"TonTonImport" reason:reason userInfo:nil];
+}
+static void TTImportDirectory(NSString *path) {
+    NSFileManager *fm=NSFileManager.defaultManager;
+    NSDictionary *attributes=[fm attributesOfItemAtPath:path error:nil];
+    if(attributes){TTImportRequire([attributes[NSFileType] isEqual:NSFileTypeDirectory],@"导入路径包含链接或非目录项目。");return;}
+    NSError *error=nil;
+    TTImportRequire([fm createDirectoryAtPath:path withIntermediateDirectories:NO attributes:nil error:&error],error.localizedDescription);
+}
+static NSString *TTImportHashFile(NSString *path) {
+    TTImportRequire(TTImportRegular(path),@"资源文件不存在或是链接。");
+    int fd=open(path.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW);
+    TTImportRequire(fd>=0,@"无法读取资源文件。");
+    CC_SHA256_CTX hash;CC_SHA256_Init(&hash);uint8_t buffer[65536];ssize_t n;
+    while((n=read(fd,buffer,sizeof(buffer)))>0)CC_SHA256_Update(&hash,buffer,(CC_LONG)n);
+    close(fd);TTImportRequire(n==0,@"读取资源文件失败。");return TTImportDigest(&hash);
+}
+static NSDictionary *TTImportOne(NSString *documents,NSString *inbox,NSDictionary *manifest) {
+    NSFileManager *fm=NSFileManager.defaultManager;
+    TTImportRequire([manifest isKindOfClass:NSDictionary.class]&&[manifest[@"schema"] isEqual:@1],@"导入清单格式不支持。");
+    NSString *title=manifest[@"game_id"],*name=manifest[@"resource_name"],*sha=manifest[@"sha256"];
+    TTImportRequire(TTImportMatch(title,@"^[a-z0-9][a-z0-9_-]{0,63}$"),@"卡带标识无效。");
+    // An archive or a RomFS image is data. No nested output paths or code names.
+    TTImportRequire(TTImportMatch(name,@"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,95}\\.(zip|img)$"),@"资源名称必须是 ZIP 或 RomFS 镜像。");
+    TTImportRequire(TTImportMatch(sha,@"^[0-9a-f]{64}$"),@"资源校验值无效。");
+    TTImportRequire([manifest[@"bytes"] isKindOfClass:NSNumber.class],@"缺少资源大小。");
+    uint64_t total=[manifest[@"bytes"] unsignedLongLongValue];
+    TTImportRequire(total>0&&total<(2ull<<40),@"资源大小无效。");
+    NSArray *chunks=manifest[@"chunks"];
+    TTImportRequire([chunks isKindOfClass:NSArray.class]&&chunks.count&&chunks.count<=16384,@"资源分块清单无效。");
+    NSMutableSet *names=[NSMutableSet new];uint64_t sum=0;
+    for(id item in chunks){
+        TTImportRequire([item isKindOfClass:NSDictionary.class],@"资源分块条目无效。");
+        NSString *file=item[@"file"];
+        TTImportRequire(TTImportMatch(file,@"^[0-9]{4,5}-[0-9a-f]{64}\\.part$")&&![names containsObject:file],@"分块名称重复或无效。");
+        TTImportRequire(TTImportMatch(item[@"sha256"],@"^[0-9a-f]{64}$")&&[item[@"bytes"] isKindOfClass:NSNumber.class],@"缺少分块校验数据。");
+        uint64_t bytes=[item[@"bytes"] unsignedLongLongValue];
+        TTImportRequire(bytes>0&&bytes<=(1ull<<30)&&sum<=total&&bytes<=total-sum,@"分块大小超出资源范围。");
+        sum+=bytes;[names addObject:file];
+    }
+    TTImportRequire(sum==total,@"分块大小与完整资源不符。");
+    NSString *games=[documents stringByAppendingPathComponent:@"Games"];TTImportDirectory(games);
+    NSString *slot=[games stringByAppendingPathComponent:title];TTImportDirectory(slot);
+    NSString *resources=[slot stringByAppendingPathComponent:@"Resources"];TTImportDirectory(resources);
+    NSString *destination=[resources stringByAppendingPathComponent:name];
+    if([fm attributesOfItemAtPath:destination error:nil]){
+        TTImportRequire([[fm attributesOfItemAtPath:destination error:nil][NSFileSize] unsignedLongLongValue]==total&&
+                        [TTImportHashFile(destination) isEqual:sha],@"已有资源与导入清单不同，已保留原文件。");
+    }else{
+        uint64_t free=[fm attributesOfFileSystemForPath:documents error:nil][NSFileSystemFreeSize]?
+            [[fm attributesOfFileSystemForPath:documents error:nil][NSFileSystemFreeSize] unsignedLongLongValue]:0;
+        TTImportRequire(free>total+(256ull<<20),@"空间不足，分块已保留。");
+        NSString *temporary=[inbox stringByAppendingPathComponent:[@".assembling-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+        int output=open(temporary.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+        TTImportRequire(output>=0,@"无法在应用内创建临时资源。");
+        BOOL complete=NO;
+        @try{
+            CC_SHA256_CTX whole;CC_SHA256_Init(&whole);
+            for(NSDictionary *chunk in chunks){
+                NSString *path=[inbox stringByAppendingPathComponent:chunk[@"file"]];
+                TTImportRequire(TTImportRegular(path),@"分块缺失或包含链接。");
+                uint64_t expected=[chunk[@"bytes"] unsignedLongLongValue];
+                TTImportRequire([[fm attributesOfItemAtPath:path error:nil][NSFileSize] unsignedLongLongValue]==expected,@"分块大小已改变。");
+                int input=open(path.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW);TTImportRequire(input>=0,@"分块无法读取。");
+                CC_SHA256_CTX hash;CC_SHA256_Init(&hash);uint64_t count=0;ssize_t n;uint8_t bytes[65536];
+                @try{
+                    while((n=read(input,bytes,sizeof(bytes)))>0){
+                        count+=(uint64_t)n;TTImportRequire(count<=expected,@"分块在导入时改变。");
+                        CC_SHA256_Update(&hash,bytes,(CC_LONG)n);CC_SHA256_Update(&whole,bytes,(CC_LONG)n);
+                        ssize_t at=0;while(at<n){ssize_t wrote=write(output,bytes+at,(size_t)(n-at));
+                            TTImportRequire(wrote>0,@"资源写入失败，原资源和分块已保留。");at+=wrote;}
+                    }
+                    TTImportRequire(n==0&&count==expected&&[TTImportDigest(&hash) isEqual:chunk[@"sha256"]],@"分块校验失败，原资源已保留。");
+                }@finally{close(input);}
+            }
+            TTImportRequire([TTImportDigest(&whole) isEqual:sha],@"完整资源校验失败。");
+            TTImportRequire(fsync(output)==0,@"资源写入尚未完成。");
+            NSError *error=nil;
+            TTImportRequire([fm moveItemAtPath:temporary toPath:destination error:&error],error.localizedDescription);
+            complete=YES;
+        }@finally{
+            close(output);
+            // Only this invocation's newly created temporary file is removed.
+            // Inputs, existing destinations and saves are never deleted.
+            if(!complete)[fm removeItemAtPath:temporary error:nil];
+        }
+    }
+    TTImportDirectory([slot stringByAppendingPathComponent:@"UserData"]);
+    NSString *cardPath=[slot stringByAppendingPathComponent:@"GameCard.json"];
+    if(![fm attributesOfItemAtPath:cardPath error:nil]){
+        NSMutableDictionary *card=[@{@"schema":@1,@"title_id":title,@"name":title,@"version":@"",@"size":@""} mutableCopy];
+        if([manifest[@"card"] isKindOfClass:NSDictionary.class])for(NSString *key in @[@"name",@"version",@"size"])
+            if([manifest[@"card"][key] isKindOfClass:NSString.class])card[key]=manifest[@"card"][key];
+        NSError *error=nil;NSData *data=[NSJSONSerialization dataWithJSONObject:card options:0 error:&error];
+        TTImportRequire(data&&[data writeToFile:cardPath options:NSDataWritingAtomic error:&error],error.localizedDescription);
+    }
+    NSDictionary *attributes=[fm attributesOfItemAtPath:destination error:nil];
+    return @{@"status":@"imported",@"resource":name,@"game_id":title,@"bytes":@(total),@"sha256":sha,
+             @"mtime":@([attributes[NSFileModificationDate] timeIntervalSince1970])};
+}
+static NSArray *TonTonImportPendingResources(NSString *documents) {
+    static NSObject *guard;static dispatch_once_t once;dispatch_once(&once,^{guard=[NSObject new];});
+    @synchronized(guard){
+        NSMutableArray *results=[NSMutableArray new];NSFileManager *fm=NSFileManager.defaultManager;
+        NSString *root=[documents stringByAppendingPathComponent:@"TonTonIncoming"];
+        if(![[fm attributesOfItemAtPath:root error:nil][NSFileType] isEqual:NSFileTypeDirectory])return results;
+        for(NSString *entry in [fm contentsOfDirectoryAtPath:root error:nil]){
+            NSString *folder=[root stringByAppendingPathComponent:entry];
+            if(![[fm attributesOfItemAtPath:folder error:nil][NSFileType] isEqual:NSFileTypeDirectory])continue;
+            NSString *manifestPath=[folder stringByAppendingPathComponent:@"ImportTask.json"];
+            if(!TTImportRegular(manifestPath))continue;
+            NSString *receiptPath=[folder stringByAppendingPathComponent:@"ImportResult.json"];
+            if([fm attributesOfItemAtPath:receiptPath error:nil])continue; // A retry requires explicit removal of the receipt.
+            NSDictionary *result;
+            @try{
+                TTImportRequire([[fm attributesOfItemAtPath:manifestPath error:nil][NSFileSize] unsignedLongLongValue]<(8<<20),@"导入清单过大。");
+                NSDictionary *manifest=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:manifestPath] options:0 error:nil];
+                result=TTImportOne(documents,folder,manifest);
+            }@catch(NSException *error){result=@{@"status":@"failed",@"reason":error.reason?:@"导入失败"};}
+            [[NSJSONSerialization dataWithJSONObject:result options:NSJSONWritingPrettyPrinted error:nil] writeToFile:receiptPath options:NSDataWritingAtomic error:nil];
+            [results addObject:result];
+        }return results;
+    }
+}

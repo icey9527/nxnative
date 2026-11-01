@@ -61,9 +61,25 @@ claims are invented for them. Latest upstream evidence is the Donkey Kong Bananz
 Mac profile, not an iOS result:
 https://github.com/seedds/nxnative/tree/cd859c38a8f8890ddbb57a23d6f45e23ba9e6651/dm/games/040074A01BF12000
 
+## Data inbox import
+
+The library processes `Documents/TonTonIncoming/<transfer>/ImportTask.json`
+inside its own sandbox while refreshing its catalog. Schema 1 contains
+`game_id`, `resource_name` (ZIP/IMG data only), `bytes`, `sha256`, and ordered
+`chunks` with `file`, `bytes` and `sha256`. Optional `card` strings provide the
+name, version and size. Chunk filenames are `<index>-<sha256>.part`.
+
+The importer validates every chunk and the combined SHA before atomically
+moving the data into the cartridge's Resources. It rejects traversal, links,
+duplicate chunks, inconsistent sizes and replacement of different existing
+data. Inputs and saves are retained. `ImportResult.json` records success or
+failure; an explicit retry removes that receipt after correcting its inputs.
+No game is launched by an import. A successful data import is not a runtime
+compatibility result.
+
 ## Upstream review before changes
 
-Before each source-change batch, read `git ls-remote upstream refs/heads/main`
+Before each source-change batch, run `git fetch upstream main`
 and inspect relevant changes in an isolated checkout. Record the upstream SHA
 and the actual fixes considered. Bring compatible fixes into
 `ios16-pokemon-za-port` with their tests and preserve platform support. This is
