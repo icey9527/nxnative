@@ -121,6 +121,7 @@ BOOL TonTonWebRuntimeAvailable(NSString *title, NSString *slot) {
 @property(strong) TTLocalRuntimeServer *server;
 @property(strong) WKWebView *web;
 @property(strong) NSFileHandle *log;
+@property(strong) UILabel *failureLabel;
 @end
 @implementation TTWebRuntimeController
 - (void)dealloc {
@@ -174,9 +175,27 @@ BOOL TonTonWebRuntimeAvailable(NSString *title, NSString *slot) {
 - (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message {
     if([message.body isKindOfClass:NSDictionary.class])[self writeLog:[NSString stringWithFormat:@"%@: %@",message.body[@"kind"],message.body[@"text"]]];
 }
-- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView { [self writeLog:@"WebKit content process terminated; inspect memory/crash report. No automatic reload."]; }
-- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error { [self writeLog:error.description]; }
-- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error { [self writeLog:error.description]; }
+- (void)showRuntimeFailure {
+    // Keep the persistent Wine store and the diagnostic report. A terminated
+    // content process must not leave an unexplained blank view or reload loop.
+    [self.web stopLoading];self.web.hidden=YES;
+    if(self.failureLabel)return;
+    UILabel *label=[UILabel new];label.frame=CGRectInset(self.view.bounds,32,32);
+    label.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    label.numberOfLines=0;label.textAlignment=NSTextAlignmentCenter;label.textColor=UIColor.labelColor;
+    label.text=@"运行层已停止，日志已保留。\n请关闭并重新打开游戏匣。";
+    self.failureLabel=label;[self.view addSubview:label];
+}
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+    [self writeLog:@"WebKit content process terminated; inspect memory/crash report. No automatic reload."];
+    [self showRuntimeFailure];
+}
+- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self writeLog:error.description];if(error.code!=NSURLErrorCancelled)[self showRuntimeFailure];
+}
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self writeLog:error.description];if(error.code!=NSURLErrorCancelled)[self showRuntimeFailure];
+}
 @end
 UIViewController *TonTonWebRuntimeController(NSString *title,NSString *slot) {
     if(!TonTonWebRuntimeAvailable(title,slot))return nil;

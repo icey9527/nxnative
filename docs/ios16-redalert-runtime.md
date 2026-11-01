@@ -85,3 +85,25 @@ not the complete upstream CPU suite, and is not iPad gameplay or a performance
 benchmark. Do not claim a frame-rate gain before measuring the installed runtime
 on the target device. Bundle this patch, upstream revision, build flags, GPL
 license and corresponding-source link with any distributed candidate.
+
+## Rejected on-device scalar JIT and recovery
+
+The `.34` candidate above failed on the actual M2 iPad running iPadOS 16.1.
+Its WebKit log repeatedly rejected both standalone and batched generated modules
+with `br / br_if` targets exceeding the control-stack depth, followed by a
+terminated WebKit content process. Desktop Chrome's 1537 CPU checks and COM
+probe did not cover this engine-specific failure. Do not deploy this candidate
+as an iOS 16 compatibility or performance fix; static instruction validation
+alone cannot validate dynamically generated modules. Preserve the failing log
+and require execution in the target WebKit engine for a replacement candidate.
+
+M2 `.35` restores the bounded-reader interpreter with Wasm SHA-256
+`b95d8088d70f29cc997a2448d045f57adb6709b9fd87a42c92494c9f2a84610c`.
+The runtime, host code, eight existing guest frameworks, resource bindings,
+19 game directories, save hashes and CPU tables were read back after the
+overwrite install. No game was automatically launched. This removes the known
+JIT regression; it does not resolve the previously reported interpreter lag.
+
+The native wrapper now displays a Chinese failure message when WebKit terminates
+or navigation fails, while preserving its diagnostic log and persistent store.
+It does not reload automatically, reset Wine, or silently discard saved state.
