@@ -12,6 +12,7 @@ static int hid_usleep(useconds_t usec);
 #undef usleep
 #include "../pad_slots.h"
 
+module_t *g_mod; int g_nmod; // no guest module in the generic HID regressions
 static int checks, fails, g_mode = 1, g_signals;
 static void *g_signalled;
 static time_t rumble_second = 1;
@@ -359,6 +360,43 @@ static void t_motion_hid(void) {
     dm_pad_players(1); g_phone_mode = -1;
 }
 
+static void t_nfs_race_buttons(void) {
+    static module_t m;
+    size_t size=0x1800000;
+    uint8_t *base=calloc(1,size), *wrapper=calloc(1,0x20), *owner=calloc(1,0x14144c);
+    CHECK(base && wrapper && owner,"allocate isolated NFS control state");
+    if (!base || !wrapper || !owner) abort();
+    strcpy(m.name,"main"); strcpy(m.build_id,"799d1061182c1302e08e706b84ce76e5");m.base=base;m.size=size;g_mod=&m;g_nmod=1;
+    *(uint32_t *)(base+0x1c0ae0)=0xd00061b7; *(uint32_t *)(base+0x1c0ae4)=0xf9448ef7;
+    *(uint32_t *)(base+0x1c4ab4)=0x52828909; *(uint32_t *)(base+0x1c4ab8)=0x72a00289; *(uint32_t *)(base+0x1c4abc)=0x38696908;
+    *(uintptr_t *)(base+0xeed0d0)=(uintptr_t)wrapper;*(uintptr_t *)(wrapper+0x10)=(uintptr_t)owner;
+    uint8_t *groups=owner+0x141448;
+    g_mode=1;ids((uint32_t[]){0},1);dm_pad_players(1);
+    // Touch/keyboard, controller and script all pass through the real fill().
+    for (int source=0;source<3;source++) for (int state=0;state<6;state++) {
+        memset(groups,0,4);groups[1]=state!=0;groups[2]=state==2;groups[3]=state==3;
+        if(state==4)groups[1]=2;
+        if(state==5)m.build_id[0]='0';
+        int driving=state==1;
+        for (unsigned bits=0;bits<16;bits++) {
+            dm_input_set(source==0?bits:0,0,0,0,0); dm_pad_set(source==1?bits:0,0,0,0,0);script_set(source==2?bits:0,0,0,0,0);
+            (void)buttons_of(0,STYLE_FULLKEY); // drain the existing edge latch
+            uint64_t expected=bits;
+            if(driving)expected=(bits&~12u)|((bits&4u)<<1)|((bits&8u)>>1);
+            CHECK(buttons_of(0,STYLE_FULLKEY)==expected,"NFS driving-only X/Y; A/B and menus unchanged across input sources");
+        }
+        m.build_id[0]='7';
+    }
+    groups[1]=1; groups[2]=groups[3]=0;
+    *(uintptr_t *)(wrapper+0x10)=1;CHECK(race_buttons(DM_BTN_X)==DM_BTN_X,"unreadable owner fails closed");
+    *(uintptr_t *)(wrapper+0x10)=(uintptr_t)owner;
+    *(uintptr_t *)(base+0xeed0d0)=0;CHECK(race_buttons(DM_BTN_X)==DM_BTN_X,"loading with no wrapper fails closed");
+    *(uintptr_t *)(base+0xeed0d0)=(uintptr_t)wrapper;
+    *(uint32_t *)(base+0x1c4ab4)^=1;CHECK(race_buttons(DM_BTN_X)==DM_BTN_X,"different instruction fails closed");
+    g_nmod=0;g_mod=NULL;dm_input_set(0,0,0,0,0);dm_pad_set(0,0,0,0,0);script_set(0,0,0,0,0);
+    free(base);free(wrapper);free(owner);
+}
+
 int main(void) {
     CHECK(setenv("DM_RUMBLE_LOG", "1", 1) == 0, "enable rumble diagnostics");
     t_slots();
@@ -369,6 +407,7 @@ int main(void) {
     t_motion_threads();
     t_motion_live();
     t_motion_hid();
+    t_nfs_race_buttons();
     printf("hid players: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

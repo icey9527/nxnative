@@ -11,6 +11,7 @@
 #include "dm.h"
 #include "haptics_apple.h"
 #include "DmAudioRetry.h"
+#include "DmAudioBuffer.h"
 #include "DmDisplayRefresh.h"
 #include <stdatomic.h>
 static _Atomic int g_ios_screen_hz=60;
@@ -423,7 +424,13 @@ void front_ios_audio_session(void) {
     e = nil;
     if (![s setPreferredSampleRate:48000 error:&e] && report) LOG("[RED] audio session preferred sample rate failed: %s", e.localizedDescription.UTF8String);
     e = nil;
-    if (![s setPreferredIOBufferDuration:0.005 error:&e] && report) LOG("[RED] audio session I/O buffer duration could not be set: %s", e.localizedDescription.UTF8String);
+#ifdef DM_MULTI_GAME
+    const char *audio_title = getenv("DM_LIBRARY_GAME_ID");
+#else
+    const char *audio_title = DM_GAME_ID;
+#endif
+    double requested_buffer = dm_audio_buffer_seconds(audio_title);
+    if (![s setPreferredIOBufferDuration:requested_buffer error:&e] && report) LOG("[RED] audio session I/O buffer duration could not be set: %s", e.localizedDescription.UTF8String);
     e = nil;
     g_session_off = ![s setActive:YES error:&e];
     if (g_session_off) {
@@ -439,7 +446,7 @@ void front_ios_audio_session(void) {
     }
     front_ios_audio_apply();
     if (report) {
-        LOG("audio session: sample rate %.0f Hz, I/O buffer %.2f ms (asked for 5 ms)", s.sampleRate, s.IOBufferDuration * 1000);
+        LOG("audio session: sample rate %.0f Hz, I/O buffer %.2f ms (asked for %.2f ms)", s.sampleRate, s.IOBufferDuration * 1000, requested_buffer * 1000);
         front_ios_audio_route_log(g_session_off ? "activation failed" : "activated");
     }
     g_audio_activation_logged = 1;

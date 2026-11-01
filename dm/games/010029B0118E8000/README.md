@@ -127,3 +127,24 @@ the BC-to-ASTC path). The EA dialogs now show
 text, logos and borders. This verifies that particular data-loss repair,
 not the complete 3D picture or gameplay: the bounded A-input reproduction
 ends on the user-agreement page. No shader chain or game resources changed.
+
+
+### Driving-only X/Y and audio underruns (2026-11-01)
+
+The owner confirmed playable graphics but intermittent audio and requested X/Y
+functions to exchange only during a race. `nfs_driving_input.h` checks the exact
+`799d1061182c1302e08e706b84ce76e5` main image and five instructions before reading
+its control groups: CAR enabled, MENU and DEBUG disabled. The host swaps only
+X/Y bits after input sources merge. The screen layout and base keyboard or
+controller mappings stay unchanged. Unreadable or unknown state keeps native
+buttons. The production HID path passes 411 checks including menu transitions,
+all face-button combinations and touch/keyboard, controller and script inputs.
+
+The original Air log contains real AudioUnit underruns: some roughly 12-second
+intervals inserted 1.9–2.94 seconds of silence. This title now requests a 2.5 ms
+session buffer instead of 5 ms, to reduce callbacks consuming several small
+guest blocks at once. Actual hardware rate and granted buffer duration remain
+logged. Other games keep 5 ms. This is a measured-failure-driven candidate,
+not a claim that every source of audio starvation is fixed. Compare new
+underrun/silence counters on the owner's next normal play session. The queue
+ownership, sample conversion and render backend are unchanged.

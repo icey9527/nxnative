@@ -15,6 +15,8 @@
 #include <time.h>
 #include <math.h>
 #include "motion_fusion.h"
+#include "nfs_driving_input.h"
+#include <mach/mach.h>
 
 enum { NPAD_NO1 = 0, NPAD_HANDHELD = 0x20 };
 enum { STYLE_FULLKEY = 1u << 0, STYLE_HANDHELD = 1u << 1, STYLE_JOYDUAL = 1u << 2, STYLE_JOYLEFT = 1u << 3, STYLE_JOYRIGHT = 1u << 4 };
@@ -288,6 +290,20 @@ void dm_pad_players(uint32_t mask) {
     note_merged();
 }
 
+// The policy is applied after all input paths and edge latches merge. The
+// frontends retain their printed letters, hit regions and keyboard bindings.
+static int nfs_input_read(uintptr_t address, void *out, size_t size) {
+    vm_size_t got=0;
+    return address>=0x1000 && address<=UINTPTR_MAX-size &&
+        vm_read_overwrite(mach_task_self(),address,size,(vm_address_t)out,&got)==KERN_SUCCESS && got==size;
+}
+static uint64_t race_buttons(uint64_t buttons) {
+    if (!(buttons & (DM_BTN_X|DM_BTN_Y))) return buttons;
+    for (int i=0;i<g_nmod;i++) if (!strcmp(g_mod[i].name,"main"))
+        return dm_nfs_driving_buttons(buttons, dm_nfs_driving((uintptr_t)g_mod[i].base,g_mod[i].build_id,nfs_input_read));
+    return buttons;
+}
+
 static void fill(NpadState *s, uint32_t id, uint32_t style) {
     int receipt = receipt_enabled();
     uint64_t read_start = receipt ? now_ns() : 0;
@@ -319,7 +335,7 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     if (s->ry > STICK_THRESH) b |= 1u << 21;
     if (s->rx > STICK_THRESH) b |= 1u << 22;
     if (s->ry < -STICK_THRESH) b |= 1u << 23;
-    s->buttons = b;
+    s->buttons = pl ? b : race_buttons(b);
     s->attributes = ATTR_CONNECTED | (id == NPAD_HANDHELD ? ATTR_WIRED | ATTR_LEFT_CONN | ATTR_LEFT_WIRED | ATTR_RIGHT_CONN | ATTR_RIGHT_WIRED : ATTR_LEFT_CONN | ATTR_RIGHT_CONN);
     if (receipt) receipt_note(s, id, style, read_start);
 }
