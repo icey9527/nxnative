@@ -13,6 +13,7 @@
 #import "DmCrashLogArchive.h"
 #ifdef DM_LIBRARY_HOST
 #import "../LibraryApp/Sources/LibraryRoot.h"
+#import "../LibraryApp/Sources/LibraryFramework.h"
 #endif
 
 extern char **environ;
@@ -177,6 +178,13 @@ static int boot_env(void) {
     setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
     setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
     NSString *dm = [res stringByAppendingPathComponent:@"dm"];
+    NSString *moduleTables=dm;
+#ifdef DM_LIBRARY_HOST
+    NSString *frameworkError=nil;
+    if (!TonTonPrepareGameFramework(@(getenv("DM_LIBRARY_GAME_ID")),&moduleTables,&frameworkError)) {
+        fprintf(stderr,"[RED] boot: %s\n",frameworkError.UTF8String);return 0;
+    }
+#endif
     setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
     setenv("DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);
     setenv("DM_FONT_DIR", [dm stringByAppendingPathComponent:@"font"].fileSystemRepresentation, 0);   // Shared-font stand-ins (standard.ttf / nintendo_ext.ttf): iOS lacks the macOS font path
@@ -185,7 +193,7 @@ static int boot_env(void) {
     NSString *pso = [res stringByAppendingPathComponent:@"pso"];   // the pipeline archive made offline (build_ipa.sh, dm/gfx/tools/pso_offline.py): the shader pairs' bases, which the device then does not build
     if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
     chdir(doc.fileSystemRepresentation);
-    g_argv[0] = strdup("dmhost"); g_argv[1] = strdup(dm.fileSystemRepresentation); g_argc = 2;
+    g_argv[0] = strdup("dmhost"); g_argv[1] = strdup(moduleTables.fileSystemRepresentation); g_argc = 2;
     dm_host_preload_start(g_argc, g_argv);   // Module tables / relocation / takeover run early in the background, in parallel with UIKit startup (and the launcher: the settings it sets are read when the game starts)
     return 1;
 }

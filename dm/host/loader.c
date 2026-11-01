@@ -10,9 +10,16 @@
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include "hle.h"
+#include "loader_image.h"
 
 module_t *g_mod;
 int g_nmod;
+static const void *g_module_image_mh;
+int dm_set_game_image_header(const void *header) {
+    if (!header || g_nmod || (g_module_image_mh && g_module_image_mh != header)) return 0;
+    g_module_image_mh = header;
+    return 1;
+}
 // Stable module addresses live in g_mod; lookup order follows activation, including unload/reload.
 static module_t **g_loaded; static int g_nloaded, g_mod_capacity;
 static pthread_rwlock_t g_modules_mu = PTHREAD_RWLOCK_INITIALIZER;
@@ -505,7 +512,7 @@ void loader_hash_log(void) {
 // inside __TEXT.  Only the hole is replaced with a writable copy-on-write
 // mapping; the code stays in dyld's original signed executable mapping.
 #include <mach/mach.h>
-#define IMAGE_MH (&_mh_execute_header)
+#define IMAGE_MH ((const struct mach_header_64 *)(g_module_image_mh ? g_module_image_mh : (const void *)&_mh_execute_header))
 #if TARGET_OS_TV
 // The tvOS packager gives guest data its final, nonexecutable RW segment
 // before signing. Find code sections across the split guest RX segments;
@@ -536,7 +543,8 @@ static void map_image(module_t *m, const char *dir) {
     (void)dir;
     const char *ns = "";
 #ifdef DM_MULTI_GAME
-    ns = dm_profile_current()->embed_ns;
+    // A framework has its own image, so its module sections need no namespace.
+    if (!g_module_image_mh) ns = dm_profile_current()->embed_ns;
 #endif
 #if TARGET_OS_TV
     char sx0[17], sx1[17], sd[17];
