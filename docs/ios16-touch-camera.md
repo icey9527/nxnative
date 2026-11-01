@@ -1,5 +1,31 @@
 # Touch camera after keyboard disconnection
 
+## Racing touch pedals
+
+For Need for Speed Hot Pursuit Remastered (`010029B0118E8000`), the touch
+overlay adds two shortcuts above the unchanged face-button diamond. Touching
+`油门锁` accelerates immediately; releasing inside it toggles a visible throttle
+latch. The player can then steer with the left thumb and use X with the right
+thumb without holding the distant ZR shoulder button. Tapping the latch again
+stops it. The nearby `刹车` is a momentary ZL alias and also clears the latch;
+releasing the brake never resumes latched acceleration. Original ZL also clears
+it. The original ZR, XBAY positions, face-button meanings, controller mapping
+and keyboard bindings remain available.
+
+These shortcuts use the existing per-finger ownership table. Sliding a steering
+or face-button finger over them does not activate them. Cancellation, input
+focus reset, layout changes and external-input handoff clear the latch. They
+appear only for this game's visible touch layouts and hide with the rest of
+the overlay when a controller or keyboard is present. No latch is persisted
+between games or sessions.
+
+`dm/ios/tests/test_racing_touch.py` executes the production pedal-state helper
+with simultaneous face-button combinations, braking, toggling and resets.
+It does not claim to test UIKit finger delivery; on-device driving remains a
+separate acceptance check.
+
+## Touch ownership
+
 The input defect was in touch ownership, not trackpad gesture recognition. Z-A's
 profile starts with the Simple layout (`DM_GAME_PAD_LAYOUT=0`); after removing a
 keyboard, Simple returned on screen but only the Full/3D layout assigned empty

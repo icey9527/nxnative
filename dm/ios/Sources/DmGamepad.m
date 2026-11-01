@@ -30,9 +30,10 @@
 #include <stdatomic.h>
 #include "DmFaceLayout.h"
 #include "DmControllerPolicy.h"
+#include "DmRacingTouch.h"
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
-enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME, C_RUN, C_AIM };
+enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME, C_RUN, C_AIM, C_GAS, C_BRAKE };
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static BOOL g_input_active = YES;
@@ -201,6 +202,8 @@ static __weak DmGamepad *g_view;
     CAShapeLayer *_run; CATextLayer *_runLabel; BOOL _runHeld;
     CAShapeLayer *_aim; CATextLayer *_aimLabel; BOOL _aimHeld, _aimLatched;
     CAShapeLayer *_throw; CATextLayer *_throwLabel; BOOL _throwEnabled;
+    CAShapeLayer *_gas, *_brake; CATextLayer *_gasLabel, *_brakeLabel;
+    BOOL _racingTouch, _gasLatchedShown; dm_racing_touch _racing;
     BOOL _stickShown;                              // the left stick was held at the last refresh
     BOOL _full, _tap;                              // the 3D layout / the Tap layout is current
     CALayer *_controls;                            // holds every control layer; the default external-input policy may hide it while the view stays active for game touches
@@ -264,6 +267,9 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS; }   // stick clicks
         // release throws. It shares C_BTN ownership with the original ZR.
         _throwEnabled = pad_env_on("DM_THROW_ZR");
         _throw = shape(_controls); _throwLabel = label(_throw, @"投掷");
+        _racingTouch = nfs_keyboard();
+        _gas = shape(_controls); _gasLabel = label(_gas, @"油门锁");
+        _brake = shape(_controls); _brakeLabel = label(_brake, @"刹车");
         if (g_run_button) LOG("front end: Run touch button and either Shift alias native %s independently of visible face labels", run);
         if (g_aim_button) LOG("front end: tap Aim toggles ZL; hold either Command to aim; release/focus loss clears modifier input");
         if (_throwEnabled) LOG("front end: left Throw holds native ZR; right camera drag stays independent; release throws");
@@ -341,6 +347,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS; }   // stick clicks
     _run.hidden = _tap || !g_run_button;
     _aim.hidden = _tap || !g_aim_button;
     _throw.hidden = _tap || !_throwEnabled;
+    _gas.hidden = _brake.hidden = _tap || !_racingTouch;
     _swapLabel.string = _tap ? @"Tap" : _full ? @"3D" : @"2D";
     [CATransaction commit];
 }
@@ -381,6 +388,11 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
     if (g_run_button) c.x += (g_aim_button ? 140 : 70) * self.u;
     return c;
 }
+- (CGRect)gasRect {
+    CGRect s = self.corner; CGFloat u = self.u;
+    return CGRectMake(CGRectGetMaxX(s) - 169 * u, CGRectGetMaxY(s) - 235 * u, 72 * u, 44 * u);
+}
+- (CGRect)brakeRect { return CGRectOffset(self.gasRect, 82 * self.u, 0); }
 - (CGPoint)stickCentre:(int)i { return i ? _rCentre : self.stickHome; }
 - (CGFloat)stickR:(int)i { return (i ? K_RSTICK_R : K_STICK_R) * self.u; }
 - (BOOL)inRightArea:(CGPoint)p { CGRect b = self.bounds; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE; }
@@ -434,7 +446,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 // ---- Touch ----
 - (void)recompute {
     uint64_t face = 0; for (UITouch *t in _faceOf) face |= [_faceOf objectForKey:t].unsignedLongLongValue;
-    uint64_t btn = 0, dpad = 0; BOOL swap = NO, run = NO, aim = NO;
+    uint64_t btn = 0, dpad = 0; BOOL swap = NO, run = NO, aim = NO, gas = NO, brake = NO;
     for (UITouch *t in _owner) { uint64_t v = [_owner objectForKey:t].unsignedLongLongValue; int c = (int)(v & 0xff);
         if (c == C_BTN) btn |= 1ull << (v >> 8);
         else if (c == C_DPAD) dpad |= [self dpadAt:[t locationInView:self]];
@@ -443,9 +455,16 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         int c = [_owner objectForKey:t].unsignedLongLongValue & 0xff;
         if (c == C_RUN) run = YES;
         if (c == C_AIM) aim = YES;
+        if (c == C_GAS) gas = YES;
+        if (c == C_BRAKE) brake = YES;
     }
     if (run) btn |= g_run_button;
     if (aim || _aimLatched) btn |= g_aim_button;
+    if (_racingTouch) {
+        brake = brake || (btn & DM_BTN_ZL) != 0;
+        if (brake) btn &= ~DM_BTN_ZR;
+        btn |= dm_racing_touch_buttons(&_racing, gas, brake);
+    }
     int32_t ax[4] = {0};
     for (int i = 0; i < 2; i++) {
         CGPoint o = [self knobOffset:i]; CGFloat R = [self stickR:i], d = hypot(o.x, o.y), dz = R * K_DEAD;
@@ -453,7 +472,8 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         CGFloat m = fmin((d - dz) / (R * K_FULL - dz), 1) / d;   // outside the dead zone: 0 rising to full at the full-tilt radius
         ax[i * 2] = (int32_t)lrint(o.x * m * 32767); ax[i * 2 + 1] = (int32_t)lrint(-o.y * m * 32767);   // host: up is positive; rounded so full tilt is exactly 32767
     }
-    BOOL changed = face != _faceBits || dpad != _dpadBits || btn != _btnBits || swap != _swapHeld || run != _runHeld || aim != _aimHeld;
+    BOOL changed = face != _faceBits || dpad != _dpadBits || btn != _btnBits || swap != _swapHeld || run != _runHeld || aim != _aimHeld || _gasLatchedShown != _racing.throttle_latched;
+    _gasLatchedShown = _racing.throttle_latched;
     uint64_t pressed = (face | dpad | btn) & ~(_faceBits | _dpadBits | _btnBits);
     unsigned gripping = (_stick[0] ? 1u : 0) | (_stick[1] ? 2u : 0);
     if (pressed || (swap && !_swapHeld) || (gripping & ~_hapticSticks)) {
@@ -517,6 +537,12 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         if (_padOff) { game |= [self gameBegin:t]; continue; }
         CGPoint p = [t locationInView:self]; int hit = _tap ? -1 : [self btnAt:p];
         if (hit >= 0) { [_owner setObject:@(C_BTN | (uint64_t)hit << 8) forKey:t]; continue; }
+        if (!_tap && _racingTouch && CGRectContainsPoint(self.gasRect, p)) {
+            [_owner setObject:@(C_GAS) forKey:t]; continue;
+        }
+        if (!_tap && _racingTouch && CGRectContainsPoint(self.brakeRect, p)) {
+            [_owner setObject:@(C_BRAKE) forKey:t]; continue;
+        }
         if (!_tap && _throwEnabled && dist(p, self.throwCenter) <= 34 * self.u) {
             [_owner setObject:@(C_BTN | (uint64_t)B_ZR << 8) forKey:t]; continue;
         }
@@ -557,8 +583,11 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 }
 - (void)endTouches:(NSSet<UITouch *> *)ts tapped:(BOOL)ended {
     BOOL swap = NO, game = NO;
+    if (!ended) dm_racing_touch_reset(&_racing);
     for (UITouch *t in ts) {
         uint64_t v = [_owner objectForKey:t].unsignedLongLongValue;
+        if (ended && (v & 0xff) == C_GAS && CGRectContainsPoint(self.gasRect, [t locationInView:self]))
+            dm_racing_touch_tap(&_racing);
         if ((v & 0xff) == C_AIM) {
             if (ended && dist([t locationInView:self], self.aimCenter) <= 28 * self.u) _aimLatched = !_aimLatched;
             else if (!ended) _aimLatched = NO;
@@ -574,7 +603,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 }
 - (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:YES]; }
 - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:NO]; }
-- (void)reset { _hoverValid = NO; _aimLatched = NO; [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil; [self pushGame]; [self recompute]; [self updateSkillFaceLayout]; }
+- (void)reset { _hoverValid = NO; _aimLatched = NO; dm_racing_touch_reset(&_racing); [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil; [self pushGame]; [self recompute]; [self updateSkillFaceLayout]; }
 
 // Some keyboard-cover trackpads deliver UIKit pointer/scroll events without
 // appearing in GCMouse.mice. Prefer recent raw motion to avoid double counting.
@@ -634,6 +663,11 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     setPath(_run, circlePath(self.runCenter, 25 * u)); placeLabel(_runLabel, self.runCenter, 14 * u);
     setPath(_aim, circlePath(self.aimCenter, 25 * u)); placeLabel(_aimLabel, self.aimCenter, 14 * u);
     setPath(_throw, circlePath(self.throwCenter, 30 * u)); placeLabel(_throwLabel, self.throwCenter, 14 * u);
+    CGRect gas = self.gasRect, brake = self.brakeRect;
+    setPath(_gas, CGPathCreateWithRoundedRect(gas, 14 * u, 14 * u, NULL));
+    setPath(_brake, CGPathCreateWithRoundedRect(brake, 14 * u, 14 * u, NULL));
+    placeLabel(_gasLabel, CGPointMake(CGRectGetMidX(gas), CGRectGetMidY(gas)), 14 * u);
+    placeLabel(_brakeLabel, CGPointMake(CGRectGetMidX(brake), CGRectGetMidY(brake)), 14 * u);
     for (int b = B_A; b <= B_Y; b++) { CGPoint c = [self facePos:b]; setPath(_key[b], circlePath(c, self.faceR)); placeLabel(_label[b], c, 20 * u); }
     for (int i = 0; i < (int)(sizeof k_btns / sizeof *k_btns); i++) { int b = k_btns[i];
         if (isDrop(b)) {
@@ -669,6 +703,11 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     _aim.fillColor = (aim ? k_on : k_idle).CGColor; _aimLabel.foregroundColor = (aim ? k_textOn : k_text).CGColor;
     BOOL throwing = (all & DM_BTN_ZR) != 0;
     _throw.fillColor = (throwing ? k_on : k_idle).CGColor; _throwLabel.foregroundColor = (throwing ? k_textOn : k_text).CGColor;
+    BOOL gas = _racingTouch && (all & DM_BTN_ZR) != 0, brake = _racingTouch && (all & DM_BTN_ZL) != 0;
+    _gas.fillColor = (gas ? k_on : k_idle).CGColor; _gasLabel.foregroundColor = (gas ? k_textOn : k_text).CGColor;
+    _gasLabel.string = _racing.throttle_latched ? @"已锁油门" : @"油门锁";
+    _gasLabel.bounds = CGRectMake(0, 0, 70 * self.u, _gasLabel.bounds.size.height);
+    _brake.fillColor = (brake ? k_on : k_idle).CGColor; _brakeLabel.foregroundColor = (brake ? k_textOn : k_text).CGColor;
     CGPoint h = self.stickHome, o = [self knobOffset:0];
     _knob.position = CGPointMake(h.x + o.x, h.y + o.y); _knob.fillColor = (_stick[0] ? k_on : k_idle).CGColor;
     [CATransaction commit];
