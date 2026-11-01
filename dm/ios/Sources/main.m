@@ -10,6 +10,7 @@
 #include "game_profile.h"   // game profile constants (the RomFS marker path)
 #include "front.h"
 #include "romfs_image.h"
+#import "DmCrashLogArchive.h"
 #ifdef DM_LIBRARY_HOST
 #import "../LibraryApp/Sources/LibraryRoot.h"
 #endif
@@ -120,6 +121,11 @@ static int boot_env(void) {
     // investigated must survive the player's attempts to reopen the game.
     NSString *history = [doc stringByAppendingPathComponent:@"Logs"];
     [fm createDirectoryAtPath:history withIntermediateDirectories:YES attributes:nil error:nil];
+    // Do not rotate away the evidence if a crash archive could not be made.
+    if (!dm_archive_crash_log(log, history) || !dm_archive_crash_log(prev, history)) {
+        NSLog(@"[RED] boot: cannot preserve crash log; existing reports retained");
+        return 0;
+    }
     if ([fm fileExistsAtPath:prev]) {
         NSString *last = [history stringByAppendingPathComponent:@"previous-4.txt"];
         [fm removeItemAtPath:last error:nil];
