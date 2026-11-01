@@ -163,7 +163,10 @@ BOOL TonTonWebRuntimeAvailable(NSString *title, NSString *slot) {
     [self.view addSubview:self.web];
     NSURLComponents *url=[NSURLComponents componentsWithString:[NSString stringWithFormat:@"http://127.0.0.1:%u/boxedwine.html",self.server.port]];
     NSMutableArray *query=[NSMutableArray new];
-    NSDictionary *options=@{@"root":@"boxedwine",@"app":@"ra2-ea-full",@"p":@"gamemd.exe",@"resolution":@"1024x768",@"bpp":@"16",@"auto":@"true",@"env":@"WINEDLLOVERRIDES:ddraw=n,b;dsound,wsock32,wined3d=b"};
+    // The owned ZIP is mounted as C:\\files. Register its COM server in Wine's
+    // normal persistent prefix before starting; a successful ZIP import alone
+    // does not install this dependency. Stop if registration fails.
+    NSDictionary *options=@{@"root":@"boxedwine",@"app":@"ra2-ea-full",@"p":@"cmd.exe",@"args":@"/c regsvr32.exe /s Blowfish.dll && gamemd.exe",@"resolution":@"1024x768",@"bpp":@"16",@"auto":@"true",@"env":@"WINEDLLOVERRIDES:ddraw=n,b;dsound,wsock32,wined3d=b"};
     for(NSString *key in options)[query addObject:[NSURLQueryItem queryItemWithName:key value:options[key]]];
     url.queryItems=query;[self writeLog:@"Starting bundled BoxedWine with owned full EA resources; runtime compatibility remains experimental."];
     [self.web loadRequest:[NSURLRequest requestWithURL:url.URL]];
