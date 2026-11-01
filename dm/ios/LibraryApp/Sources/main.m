@@ -223,6 +223,12 @@ _shellMask.frame=b;_shellMask.path=p.CGPath;_shellEdge.frame=b;_shellEdge.path=p
 @property(nonatomic,copy)void (^startGame)(NSString *titleID);
 @end
 @implementation LibraryView
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone ? UIInterfaceOrientationMaskAllButUpsideDown : UIInterfaceOrientationMaskLandscape;
+}
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+    return UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone ? UIInterfaceOrientationPortrait : UIInterfaceOrientationLandscapeRight;
+}
 - (void)viewDidLoad{[super viewDidLoad];self.view.backgroundColor=D(242,240,235,16,19,24);self.installed=[NSSet set];
 UIView *header=[UIView new];header.backgroundColor=D(255,255,252,31,37,45);header.layer.cornerRadius=24;header.layer.borderWidth=1;header.layer.borderColor=C(190,194,197).CGColor;
 UIView *red=[UIView new];red.backgroundColor=C(224,49,54);red.layer.cornerRadius=4;
