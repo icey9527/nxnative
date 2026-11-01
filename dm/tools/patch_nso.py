@@ -1115,6 +1115,8 @@ for off, oid, ow, why in obs:
         (0x29faf98, 291, "1e270101"),
         (0x2af25fc, 291, "1e270100"),
         (0x2aa2790, 547, "b940ee6a"),
+        # Read-only task trace: no exclusive window or PC-relative instruction.
+        (0x16e3424, 1316, "f9433d08"),
     }
     audited_site |= BUILD_ID == "709bfd66115298640155fcc4979dba15" and (off, oid, ow) in {
         (0xcf11ec, 33, "6ea7e406"),

@@ -2,6 +2,30 @@
 
 Current preparation: owned update 1.1.1, main build `aee8f150dda1b5a838806e1a5ea6827a`. The full profile and shader tables are still provisional in the external game work directory. Gameplay and device validation remain open.
 
+## Mission-completion crash tracing
+
+Two retained Air reports, including one from the standalone app, fault at
+`main+0x16e34fc`: the original instruction reads an allocator at offset `0x118`
+through a null resolved scene owner. The user encountered this at mission
+completion, before manually saving. These reports do not establish a save-write
+failure or a GPU fault, and existing saves do not recover the unsaved mission.
+
+Six exact-build observation sites trace resource-service initialization, owner
+assignment, request entry, weak-owner resolution, the failing allocator read,
+and destruction. The callback uses kernel-mediated reads, captures control-block
+counts and type ancestry, and retains a 32-entry ring with thread identity. It
+dumps that history before the original null read; no guest reference, register,
+allocator or return value is changed. Unsupported build/layout/gate combinations
+remain inactive. This is diagnostic instrumentation, not a lifetime repair or a
+guarantee that another crash has the same cause. Matching rewritten code and
+fixup/gate/observation tables must be delivered together.
+
+`make -C dm/host/tests GAME=0100F43008C44000 arceus-task-trace arceus-display`
+checks inaccessible/overflow/null reads, reference snapshots, bounded history,
+all six callbacks, unchanged guest registers, and camera/HUD regressions without
+game assets. The generic profile used to compile the tests does not select a
+different game at runtime.
+
 ## Legacy iPad rendering repair
 
 M2 build `20261029.1` installs but the user reports a gray scene. The log shows

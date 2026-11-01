@@ -14,7 +14,7 @@ $(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan: ../ro
 GAME_H = ../gen/$(GAME)/game_profile.h
 # Exact-build display adapters must preserve unrelated native registers and
 # refuse unsupported modules before the frontend expands the canvas.
-$(B)/t_arceus_display: t_arceus_display.c ../display_hud_geometry.h ../hle_arceus_display.c ../hle_arceus_timing.inc ../hle_game_display.c ../hle.h ../dm.h $(GAME_H) | $(B)
+$(B)/t_arceus_display: t_arceus_display.c ../display_hud_geometry.h ../hle_arceus_display.c ../hle_arceus_timing.inc ../hle_arceus_task_trace.inc ../hle_game_display.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_arceus_display.c
 .PHONY: arceus-display
 arceus-display: $(B)/t_arceus_display
@@ -22,6 +22,12 @@ arceus-display: $(B)/t_arceus_display
 	$(B)/t_arceus_display 683:512
 	$(B)/t_arceus_display 4:3
 run: arceus-display
+$(B)/t_arceus_task_trace: t_arceus_task_trace.c ../hle_arceus_task_trace.inc ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -I.. $(GINC) -o $@ t_arceus_task_trace.c
+.PHONY: arceus-task-trace
+arceus-task-trace: $(B)/t_arceus_task_trace
+	$(B)/t_arceus_task_trace
+run: arceus-task-trace
 $(B)/t_arceus_timing: t_arceus_timing.c ../hle_arceus_timing.inc ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -I.. $(GINC) -o $@ t_arceus_timing.c
 .PHONY: arceus-timing

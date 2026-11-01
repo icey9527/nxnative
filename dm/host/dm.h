@@ -102,7 +102,8 @@ enum { OBS_UE_MALLOC = 21,                                       // DRAGON QUEST
        OBS_ARCEUS_ASPECT = 31, OBS_ARCEUS_HUD = 32,
        OBS_VIOLET_CAMERA = 33, OBS_VIOLET_HUD = 34,
        OBS_ARCEUS_TIMING = 35,
-       OBS_MAX = 36 };
+       OBS_ARCEUS_TASK_TRACE = 36,
+       OBS_MAX = 37 };
 
 // A gate number's bits from 8 up are a parameter for its callback (OBS_REGION_GOT: the register that holds the address). Callbacks read the registers; a write to x0–x29 takes
 // effect when the gate returns. Exact-build display callbacks may also adjust selected saved values; gate_frame.h describes scalar SIMD lanes.

@@ -5,12 +5,14 @@
 #include "display_hud_geometry.h"
 #include <stdatomic.h>
 #include "hle_arceus_timing.inc"
+#include "hle_arceus_task_trace.inc"
 
 static _Atomic int g_display_active;
 static uint32_t g_aspect_bits;
 static float g_hud_rect[4];
 
 void dm_arceus_display_init(void) {
+    arceus_task_trace_init();
     const char *enabled = getenv("DM_FULLSCREEN"), *ratio = getenv("DM_ASPECT");
     if (!enabled || strcmp(enabled, "1")) return;
     double w, h; char extra;

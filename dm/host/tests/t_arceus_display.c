@@ -11,7 +11,7 @@ static void (*aspect_cb)(uint64_t *, int), (*hud_cb)(uint64_t *, int);
 void gate_obs_set(int id, void (*fn)(uint64_t *, int)) {
     if (id == OBS_ARCEUS_ASPECT) aspect_cb = fn;
     else if (id == OBS_ARCEUS_HUD) hud_cb = fn;
-    else assert(id == OBS_ARCEUS_TIMING);
+    else assert(id == OBS_ARCEUS_TIMING || id == OBS_ARCEUS_TASK_TRACE);
 }
 int gate_obs_present(int id) { return have && (id == OBS_ARCEUS_ASPECT || id == OBS_ARCEUS_HUD); }
 int main(int argc, char **argv) {
