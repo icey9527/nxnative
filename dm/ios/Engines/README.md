@@ -77,6 +77,13 @@ failure; an explicit retry removes that receipt after correcting its inputs.
 No game is launched by an import. A successful data import is not a runtime
 compatibility result.
 
+When the external device service cannot create a task file, a signed delivery
+can include `Runtimes/ResourceImports.json`: an array of `{inbox, manifest}`
+records. On catalog refresh the app seeds tasks only into already existing,
+non-symlink transfer directories inside its own Documents. It never replaces
+an existing task or creates a missing transfer. Game archives and credentials
+do not belong in this bundle metadata or the source repository.
+
 ## Upstream review before changes
 
 Before each source-change batch, run `git fetch upstream main`
