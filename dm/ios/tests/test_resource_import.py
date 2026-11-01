@@ -96,6 +96,51 @@ int main(int argc,char **argv){@autoreleasepool{
             self.assertEqual(result[0]['status'], 'failed')
             self.assertEqual((docs / 'Games/sample/Resources/game.zip').read_bytes(), b'keep original resource')
 
+            def empty_romfs(d, i, m):
+                m.update(resource_name='romfs.img', replace_empty_placeholder=True)
+                path = d / 'Games/sample/Resources/romfs.img'
+                path.parent.mkdir()
+                path.touch()
+            docs, _, content, result = run('empty-romfs-explicit', empty_romfs)
+            self.assertEqual(result[0]['status'], 'imported')
+            self.assertEqual((docs / 'Games/sample/Resources/romfs.img').read_bytes(), content)
+            retained = docs / 'Games/sample/Resources' / result[0]['retained_empty_placeholder']
+            self.assertTrue(retained.is_file())
+            self.assertEqual(retained.read_bytes(), b'')
+
+            def empty_without_opt_in(d, i, m):
+                empty_romfs(d, i, m)
+                m.pop('replace_empty_placeholder')
+            docs, _, _, result = run('empty-romfs-default', empty_without_opt_in)
+            self.assertEqual(result[0]['status'], 'failed')
+            self.assertEqual((docs / 'Games/sample/Resources/romfs.img').read_bytes(), b'')
+
+            def corrupt_empty(d, i, m):
+                empty_romfs(d, i, m)
+                corrupt(d, i, m)
+            docs, _, _, result = run('corrupt-empty-romfs', corrupt_empty)
+            self.assertEqual(result[0]['status'], 'failed')
+            self.assertEqual((docs / 'Games/sample/Resources/romfs.img').read_bytes(), b'')
+            self.assertEqual(list((docs / 'Games/sample/Resources').glob('*.empty-before-import-*')), [])
+
+            def nonempty_opt_in(d, i, m):
+                empty_romfs(d, i, m)
+                (d / 'Games/sample/Resources/romfs.img').write_bytes(b'original game')
+            docs, _, _, result = run('nonempty-romfs-opt-in', nonempty_opt_in)
+            self.assertEqual(result[0]['status'], 'failed')
+            self.assertEqual((docs / 'Games/sample/Resources/romfs.img').read_bytes(), b'original game')
+
+            def linked_empty(d, i, m):
+                empty_romfs(d, i, m)
+                path = d / 'Games/sample/Resources/romfs.img'
+                outside = root / 'empty-outside'
+                outside.touch()
+                path.unlink()
+                path.symlink_to(outside)
+            docs, _, _, result = run('linked-empty-romfs', linked_empty)
+            self.assertEqual(result[0]['status'], 'failed')
+            self.assertTrue((docs / 'Games/sample/Resources/romfs.img').is_symlink())
+
             # Metadata delivered in the app bundle needs no external write into
             # another app's sandbox. Only existing transfer directories qualify.
             docs, inbox, content, _ = run('seed-task')

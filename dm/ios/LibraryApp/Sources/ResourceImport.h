@@ -68,7 +68,15 @@ static NSDictionary *TTImportOne(NSString *documents,NSString *inbox,NSDictionar
     NSString *slot=[games stringByAppendingPathComponent:title];TTImportDirectory(slot);
     NSString *resources=[slot stringByAppendingPathComponent:@"Resources"];TTImportDirectory(resources);
     NSString *destination=[resources stringByAppendingPathComponent:name];
-    if([fm attributesOfItemAtPath:destination error:nil]){
+    NSDictionary *existing=[fm attributesOfItemAtPath:destination error:nil];
+    // A failed device copy can leave an empty RomFS placeholder. Replacing it
+    // requires an explicit data-only task; nonempty files and links stay intact.
+    BOOL replaceEmpty=existing && [name isEqual:@"romfs.img"] &&
+        [manifest[@"replace_empty_placeholder"] isEqual:@YES] &&
+        [existing[NSFileType] isEqual:NSFileTypeRegular] &&
+        [existing[NSFileSize] unsignedLongLongValue]==0;
+    NSString *retainedEmpty=nil;
+    if(existing && !replaceEmpty){
         TTImportRequire([[fm attributesOfItemAtPath:destination error:nil][NSFileSize] unsignedLongLongValue]==total&&
                         [TTImportHashFile(destination) isEqual:sha],@"已有资源与导入清单不同，已保留原文件。");
     }else{
@@ -101,7 +109,23 @@ static NSDictionary *TTImportOne(NSString *documents,NSString *inbox,NSDictionar
             TTImportRequire([TTImportDigest(&whole) isEqual:sha],@"完整资源校验失败。");
             TTImportRequire(fsync(output)==0,@"资源写入尚未完成。");
             NSError *error=nil;
-            TTImportRequire([fm moveItemAtPath:temporary toPath:destination error:&error],error.localizedDescription);
+            if(replaceEmpty){
+                NSDictionary *now=[fm attributesOfItemAtPath:destination error:nil];
+                TTImportRequire([now[NSFileType] isEqual:NSFileTypeRegular] &&
+                    [now[NSFileSize] unsignedLongLongValue]==0 &&
+                    [now[NSFileSystemNumber] isEqual:existing[NSFileSystemNumber]] &&
+                    [now[NSFileSystemFileNumber] isEqual:existing[NSFileSystemFileNumber]],
+                    @"空资源已改变，未替换原文件。");
+                retainedEmpty=[resources stringByAppendingPathComponent:
+                    [@"romfs.img.empty-before-import-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+                TTImportRequire([fm moveItemAtPath:destination toPath:retainedEmpty error:&error],error.localizedDescription);
+            }
+            if(![fm moveItemAtPath:temporary toPath:destination error:&error]){
+                NSString *reason=error.localizedDescription;
+                if(retainedEmpty && ![fm attributesOfItemAtPath:destination error:nil])
+                    [fm moveItemAtPath:retainedEmpty toPath:destination error:nil];
+                TTImportRequire(NO,reason);
+            }
             complete=YES;
         }@finally{
             close(output);
@@ -121,6 +145,7 @@ static NSDictionary *TTImportOne(NSString *documents,NSString *inbox,NSDictionar
     }
     NSDictionary *attributes=[fm attributesOfItemAtPath:destination error:nil];
     return @{@"status":@"imported",@"resource":name,@"game_id":title,@"bytes":@(total),@"sha256":sha,
+             @"retained_empty_placeholder":retainedEmpty.lastPathComponent?:@"",
              @"mtime":@([attributes[NSFileModificationDate] timeIntervalSince1970])};
 }
 // Delivery services may read a destination but be unable to create its task
