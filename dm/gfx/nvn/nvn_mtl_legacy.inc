@@ -34,6 +34,7 @@
 #include "nvn_dirty.h"
 #include "nvn_refl.h"
 #include "nvn_cover.h"
+#include "nvn_border.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree (in the game profile folder, -I from the Makefile)
 #include "game_profile.h"   // game profile constants (NVN driver constant segment bases, profile id)
 // Texture slots 0-127 hold combined NVN handles. Slots 128-255 hold the
@@ -3880,6 +3881,7 @@ static treg_t *g_treg; static int g_ntreg;
 // release write at registration, relaxed atomic read on the reader side, without entering g_rmu (the former h_ser locked and unlocked on every lookup, thousands of times per frame in the camp)
 static _Atomic uint64_t g_tser[1 << 20];
 static samp_par *g_sreg; static uint8_t *g_sreg_ok; static void **g_sview; static uint64_t *g_srid; static int g_nsreg;   // g_sview: sampler ID → MTLSamplerState (retained)
+static void **g_sview_w; static uint64_t *g_srid_w; static float (*g_sbk)[4];
 // Memory pool Finalize: for texture IDs whose registered texture lives on this pool, drop the cached MTLTexture (view or base texture). The cache used to be released only when the ID was registered again,
 // so a linear texture built directly on a pool kept the whole pool buffer alive (6 to 17 finalized 16 MB pool buffers stayed alive in Engage's title demo). If the ID is still used, the next lookup rebuilds it on the slow path
 static void treg_drop_ar(treg_t *r) { if (r->ar) { defer_replay_view_unref((__bridge id)r->ar); CFRelease(r->ar); r->ar = r->ar_of = NULL; r->ar_rid = 0; } }
@@ -3925,12 +3927,17 @@ void mtl_reg_samp(int sid, const samp_par *sp) {
     int id_ = sid; if (id_ < 0) return;
     pthread_mutex_lock(&g_rmu);
     if (id_ >= g_nsreg) { int n = id_ + 256; g_sreg = realloc(g_sreg, n * sizeof *g_sreg); g_sreg_ok = realloc(g_sreg_ok, n); g_sview = realloc(g_sview, n * sizeof *g_sview); g_srid = realloc(g_srid, n * sizeof *g_srid);
+        g_sview_w = realloc(g_sview_w, n * sizeof *g_sview_w); g_srid_w = realloc(g_srid_w, n * sizeof *g_srid_w); g_sbk = realloc(g_sbk, n * sizeof *g_sbk);
+        memset(g_sview_w + g_nsreg, 0, (n - g_nsreg) * sizeof *g_sview_w); memset(g_srid_w + g_nsreg, 0, (n - g_nsreg) * sizeof *g_srid_w);
         memset(g_sreg_ok + g_nsreg, 0, n - g_nsreg); memset(g_sview + g_nsreg, 0, (n - g_nsreg) * sizeof *g_sview); memset(g_srid + g_nsreg, 0, (n - g_nsreg) * sizeof *g_srid); g_nsreg = n; }
     if (g_sview[id_]) {
         static unsigned replacements;
         if (replacements++ < 128) MLOG("Sampler replacement frame=%llu sid=%d old-rid=%#llx lod=%g..%g bias=%g; GPU references retained by submission", (unsigned long long)atomic_load(&g_cur_frame), id_, (unsigned long long)g_srid[id_], sp->lod_min, sp->lod_max, sp->lod_bias);
         CFRelease(g_sview[id_]); g_sview[id_] = NULL; g_srid[id_] = 0;
     }
+    if (g_sview_w[id_]) { CFRelease(g_sview_w[id_]); g_sview_w[id_] = NULL; }
+    g_srid_w[id_] = 0;
+    memset(g_sbk[id_], 0, sizeof g_sbk[id_]);
     g_reg_gen++;
     g_sreg[id_] = *sp; g_sreg_ok[id_] = 1;
     pthread_mutex_unlock(&g_rmu);
@@ -4201,10 +4208,20 @@ static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
             d.mipFilter = MTLSamplerMipFilterLinear;
         }
     }
-    d.borderColor = p.border[3] > 0.5f ? (p.border[0] > 0.5f ? MTLSamplerBorderColorOpaqueWhite : MTLSamplerBorderColorOpaqueBlack) : MTLSamplerBorderColorTransparentBlack;
+    int bn, bw; float k[4]; const uint8_t wrap[3] = {p.ws, p.wt, p.wr};
+    int twin = nvn_border(p.border, wrap, p.reduction, &bn, &bw, k);
+    d.borderColor = (MTLSamplerBorderColor)bn;
     d.supportArgumentBuffers = YES;
     id<MTLSamplerState> s = [g_dev newSamplerStateWithDescriptor:d];
     if (s) { g_sview[sid] = (void *)CFBridgingRetain(s); g_srid[sid] = legacy_sampler_rid(s); }
+    if (s && twin) {
+        d.borderColor = (MTLSamplerBorderColor)bw;
+        id<MTLSamplerState> t = [g_dev newSamplerStateWithDescriptor:d];
+        if (!t) MDIE("[RED] Cannot create border-colour twin for sampler %d", sid);
+        g_sview_w[sid] = (void *)CFBridgingRetain(t);
+        g_srid_w[sid] = legacy_sampler_rid(t);
+        memcpy(g_sbk[sid], k, sizeof k);
+    }
     return s;
 }
 static inline __attribute__((always_inline)) void *samp_fast(int sid) {
@@ -5651,6 +5668,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     pthread_mutex_lock(&g_rmu);   // The texture / sampler registration tables may be being grown or rewritten by the game thread
     int min_candidate = min_reduction_candidate(sh); min_reduction_binding min_binding = {0};
     int color_diag = color_diag_begin(sh, nvn_stage), color_lines = 0;
+    uint32_t bmask = 0; float bk[DMSH_BORDER_SAMPLERS][4] = {{0}};
     for (int i = 0; i < sh->rf.nb; i++) {
         const nvn_rbind *b = &sh->rf.b[i];
         int reg = b->reg, aid = b->aid;
@@ -5691,13 +5709,18 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             // Declare the final indirect pointee as well as its source storage.
             NSUInteger final_offset; id<MTLBuffer> final_buffer = legacy_buffer_at(gpu, &final_offset);
             if (final_buffer != (__bridge id<MTLBuffer>)mb) USE(final_buffer, MTLResourceUsageRead);
-        } else if (b->kind == NVN_RB_SAMP || b->kind == NVN_RB_SAMPT || b->kind == NVN_RB_SAMPU) {   // SAMPT: the sampler part of a combined handle (texture ID | sampler ID << 20); SAMPU: the same, with the handle in a uniform buffer
+        } else if (b->kind == NVN_RB_SAMP || b->kind == NVN_RB_SAMPT || b->kind == NVN_RB_SAMPU || b->kind == NVN_RB_SAMPI) {   // SAMPT: the sampler part of a combined handle (texture ID | sampler ID << 20); SAMPU: the same, with the handle in a uniform buffer
             int sid = b->kind == NVN_RB_SAMPU ? ubo_samp_id(b, ubo_handle(nvn_stage, reg, b->off)) :
-                      b->kind == NVN_RB_SAMPT ? (reg < NTEX ? (int)(S.tex[nvn_stage][reg] >> 20) : 0) :
+                      b->kind == NVN_RB_SAMPI ? reg : b->kind == NVN_RB_SAMPT ? (reg < NTEX ? (int)(S.tex[nvn_stage][reg] >> 20) : 0) :
                       reg < 128 ? (int)(S.samp[nvn_stage][reg] >> 20) : 0;
             __unsafe_unretained id<MTLSamplerState> ss = sid ? (__bridge id<MTLSamplerState>)samp_fast(sid) : nil;
-            if (ss) [g_sub_samplers addObject:ss]; // useResource cannot retain non-MTLResource sampler states.
-            slots[aid] = sid && sid < g_nsreg && g_srid[sid] ? g_srid[sid] : dummy_samp_rid();
+            if (b->bw && ss && g_sview_w[sid]) {
+                ss = (__bridge id<MTLSamplerState>)g_sview_w[sid];
+                slots[aid] = g_srid_w[sid];
+                bmask |= 1u << (b->bw - 1);
+                memcpy(bk[b->bw - 1], g_sbk[sid], sizeof bk[0]);
+            } else slots[aid] = sid && sid < g_nsreg && g_srid[sid] ? g_srid[sid] : dummy_samp_rid();
+            if (ss) [g_sub_samplers addObject:ss]; // Retain the actual twin through submission completion too.
             if (min_candidate) min_reduction_bind_sampler(&min_binding, b, sid, sid > 0 && sid < g_nsreg && g_sreg_ok[sid] ? &g_sreg[sid] : NULL, ss != nil);
             geometry_diag_sampler(sh, nvn_stage, b, sid);
             if (color_diag && color_lines < 16 && sid > 0 && sid < g_nsreg && g_sreg_ok[sid]) {
@@ -5867,7 +5890,20 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                 slots[aid] = gpu_binst ? g_indirect_drv0_gpu : g_cur_arena->gpu + doff;
                 USE(db, MTLResourceUsageRead);
             }
-        } else RED_ONCE(46, "绑定种类 %d 未实现", b->kind);
+        } else if (b->kind == NVN_RB_BORDER) continue;
+        else RED_ONCE(46, "绑定种类 %d 未实现", b->kind);
+    }
+    if (sh->rf.border) {
+        int reg = 0, aid = sh->rf.b[sh->rf.border - 1].aid;
+        if (!bmask) { slots[aid] = zero_bank_gpu(); USE(zero_bank(), MTLResourceUsageRead); }
+        else {
+            int n = 32 - __builtin_clz(bmask); id<MTLBuffer> db;
+            size_t doff = arena_alloc(DMSH_BORDER_K + 16 * n, &db);
+            uint8_t *d = (uint8_t *)db.contents + doff;
+            memset(d, 0, DMSH_BORDER_K); memcpy(d, &bmask, 4);
+            memcpy(d + DMSH_BORDER_K, bk, 16 * n);
+            slots[aid] = g_cur_arena->gpu + doff; USE(db, MTLResourceUsageRead);
+        }
     }
     sample_trace_args(sh, nvn_stage, slots);
     if (min_candidate) min_reduction_binding_finish(sh, &min_binding);

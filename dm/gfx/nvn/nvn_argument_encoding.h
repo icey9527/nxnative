@@ -28,7 +28,7 @@ static int nvn_argument_encode(id<MTLArgumentEncoder> encoder, id<MTLBuffer> des
                 switch (binding->kind) {
                 case NVN_RB_CBUF: case NVN_RB_SBUFP: case NVN_RB_SBUFU: case NVN_RB_UBOP:
                 case NVN_RB_SUPPORT: case NVN_RB_C1: case NVN_RB_DRV0: case NVN_RB_DRV2:
-                case NVN_RB_IMGA: case NVN_RB_GEOMETRY: {
+                case NVN_RB_IMGA: case NVN_RB_GEOMETRY: case NVN_RB_BORDER: {
                     NSUInteger buffer_offset = 0;
                     id<MTLBuffer> buffer = legacy_buffer_at(token, &buffer_offset);
                     if (token && !buffer) { snprintf(error, error_size, "unregistered buffer token at argument %lu", (unsigned long)index); return 0; }

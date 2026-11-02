@@ -187,3 +187,16 @@ The user reports fullscreen UI outside the iPad picture. The shared
 keeps the HUD inside the native canvas without stretching the camera or changing
 input layout. Callback and geometry tests cover iPad ratios; updated device
 builds and user evaluation are pending.
+
+### Border correction and the atomic companion remain separate checks
+
+The matching-chain rebuild rejects fragment `aa3ec7536a84d1e3` with
+`Unproven image companion binding: border`: the upstream border rewrite added
+a twin sampler and correction buffer to this shader's reflection. The legacy
+renderer now binds these through its production argument encoder, including
+constant sampler IDs and private argument-buffer layouts; see
+[Border colours Metal has no sampler state for](../../../docs/reference/rendering.md#border-colours-metal-has-no-sampler-state-for).
+Synthetic Metal GPU checks cover corrected pixels and replacing the sampler
+while a submission retains its twin. The atomic-companion reflection validator
+still rejects this unproven combination. This host support alone neither
+completes the companion integration nor establishes A10X gameplay support.
