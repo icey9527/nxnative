@@ -1,6 +1,16 @@
-# nxnative
+# nxnative — iOS 16 / iOS 17 compatibility
 
-This is the maintained compatibility fork. `ios16-pokemon-za-port` is the single development branch for iOS 16.1/17 compatibility, shared game fixes and optional modern rendering features. `main` remains the upstream baseline. See [fork status and validation](docs/fork-status.md) for build targets and unresolved device failures.
+**Nintendo Switch native execution for iPhone and iPad, including an iOS/iPadOS 16.1+ legacy Metal backend.** This is [widmonstertony's compatibility fork](https://github.com/widmonstertony/nxnative), maintained on **[`ios16-ios17-compat`](https://github.com/widmonstertony/nxnative/tree/ios16-ios17-compat)**. It also retains the modern Metal 4 target for supported devices on iOS 26 or later.
+
+Start with the **[iOS 16 / iOS 17 build and installation guide](docs/ios16-ios17.md)** and the **[device compatibility status](docs/fork-status.md)**. An older OS build target does not make every game compatible with every older GPU. The upstream gallery below includes Mac results and is not an iOS 16/17 compatibility list.
+
+| Target | Minimum device OS | Renderer and scope |
+|---|---|---|
+| iOS 16 / iOS 17 compatibility | iOS / iPadOS **16.1** | Traditional Metal backend; strict per-game resource audit; A10X and M2 have different limits |
+| Modern iPhone / iPad | iOS / iPadOS **26.0** | Explicit Metal 4 target; requires compatible hardware |
+| Switch 2 | No verified iOS target | Dump inspection foundation only; upstream Mac results do not establish iPhone/iPad support |
+
+The former branch name was `ios16-pokemon-za-port`; it was renamed, preserving its history. There is one maintained compatibility branch for all games and both renderer targets. `main` is the upstream baseline. **Source builds are available; this repository does not distribute ready-to-play games or a universal compatibility guarantee.**
 
 Play your own Nintendo Switch games natively on iPhone and iPad. Bring your game (its NSP files) and your `prod.keys`; one script turns them into an IPA that you sideload.
 
@@ -43,7 +53,8 @@ The shaders are built with Xcode 27.2's Metal compiler. Select it before step 1:
 
 ```
 xcodebuild -downloadComponent MetalToolchain
-git clone https://github.com/seedds/nxnative.git && cd nxnative
+git clone --branch ios16-ios17-compat https://github.com/widmonstertony/nxnative.git
+cd nxnative
 brew install xcodegen zstd glslang
 brew install --cask dotnet-sdk
 python3 -m pip install lz4 "capstone>=5,<6" fonttools nsz zbic "backports.zstd; python_version < '3.14'"
@@ -60,10 +71,13 @@ python3 -m pip install lz4 "capstone>=5,<6" fonttools nsz zbic "backports.zstd; 
 **3. Build**, with your game folder and your `prod.keys`:
 
 ```
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys
+DM_IOS_RENDERER=legacy DM_LEGACY_TARGET=a10x DM_PSO_GPUS=none \
+  python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys
 ```
 
-The IPA appears in the game's folder. The first build takes 30–60 minutes and needs free disk space of about twice the game's size plus 10 GB; building again is much faster.
+For the tested M2 iPad capability target, use `DM_LEGACY_TARGET=m2`; do not select it for A10X. For a modern build, select `DM_IOS_RENDERER=metal4` explicitly. See the [compatibility guide](docs/ios16-ios17.md) before choosing a target.
+
+The IPA appears in the game's folder only after all build and resource checks pass. Allow at least twice the game's size plus 10 GB of free build space; large shader sets can take several hours. Building again can reuse matching caches.
 
 To play on the Mac instead, add `--platform mac-app`: you get a Mac app of the game to open from Finder. All options: [The packing script in detail](docs/development.md#the-packing-script-in-detail).
 
@@ -96,9 +110,9 @@ You get a Mac app, with no icon because the folder holds none. iPhone and iPad a
 
 ## Games
 
-Games tested on Mac or iPhone. See the [per-game notes](dm/games/README.md#games) for tested platforms, progress and known issues:
+Upstream games tested on Mac or iPhone; these results do not certify the legacy target. See the [fork device status](docs/fork-status.md) and the [per-game notes](dm/games/README.md#games) for tested platforms, progress and known issues:
 
-Needs iOS / iPadOS 26 or later on an iPhone 15 Pro or newer (A17 Pro chip or later) or an iPad with an M1 chip or later: the games' textures are BC-compressed, and older iPhones can't read that format. Other games aren't supported yet. For them the script writes a survey and still tries its best to pack an IPA, guessing the game's settings; such an IPA may not start.
+The upstream modern path targets iOS / iPadOS 26 or later and compatible hardware. This fork additionally builds for iOS / iPadOS 16.1 and 17 with a separate legacy backend, BC texture handling and verified shader companions. Layered rendering, sampler limits and image atomics still restrict individual games on older GPUs. A provisional IPA for an unregistered game may not start.
 
 Under a game, "60 fps with 1.2.0" means it runs at 60 fps (30 on the Switch) with that update.
 

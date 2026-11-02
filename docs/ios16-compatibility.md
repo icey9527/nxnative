@@ -1,6 +1,6 @@
-# iPadOS 16 compatibility checkpoint
+# Historical iPadOS 16 renderer checkpoints
 
-This branch carries the cumulative traditional Metal backend port and iPadOS 16.1 build changes. It is based on upstream commit `ebe75c9d5d34486f714678f850f0e74bbab398ac`. It needs the user's own game inputs; none are part of this branch.
+For current setup, see the [iOS 16 / iOS 17 guide](ios16-ios17.md) and [current device status](fork-status.md). The checkpoints below document the original traditional Metal port, initially based on upstream `ebe75c9d5d34486f714678f850f0e74bbab398ac`; they are historical evidence, not the current upstream baseline or a universal compatibility list. All builds need the user's own game inputs.
 
 ## Rendering and memory
 

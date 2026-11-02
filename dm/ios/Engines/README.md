@@ -89,6 +89,6 @@ do not belong in this bundle metadata or the source repository.
 Before each source-change batch, run `git fetch upstream main`
 and inspect relevant changes in an isolated checkout. Record the upstream SHA
 and the actual fixes considered. Bring compatible fixes into
-`ios16-pokemon-za-port` with their tests and preserve platform support. This is
-a read-only check and selective integration workflow; it does not restart the
+`ios16-ios17-compat` with their tests and preserve platform support. This is
+a fetch-and-merge workflow in an isolated checkout; it does not restart the
 cancelled recurring upstream rebase or overwrite user work.

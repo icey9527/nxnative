@@ -1,105 +1,95 @@
-# Compatibility fork status
+# iOS 16 / iOS 17 compatibility status
 
-## One development branch
+## One maintained compatibility branch
 
-[`ios16-pokemon-za-port`](https://github.com/widmonstertony/nxnative/tree/ios16-pokemon-za-port)
-is the only maintained compatibility branch. It contains the shared iOS 16.1/17
-host, older-GPU renderer, Chinese launcher, touch/keyboard/controller input,
-per-build game adapters and optional modern rendering features. `main` remains
-the upstream baseline. There are no separate development branches per game or
-per iOS version. Historical branches are preserved as `archive/20261029/*` tags;
-they are reference snapshots, not alternative releases. All future fixes belong
-on this branch. Per-game builds freeze its commit and select a build target;
-they must not grow independently maintained source branches.
+[`ios16-ios17-compat`](https://github.com/widmonstertony/nxnative/tree/ios16-ios17-compat)
+is the fork's default and only maintained compatibility branch. It was renamed
+from `ios16-pokemon-za-port` to describe its shared scope: all games, iOS 16.1/17,
+legacy GPUs and the optional modern Metal 4 target. `main` remains the upstream
+baseline. Historical snapshots are not alternative supported releases.
+Start with the [build and installation guide](ios16-ios17.md).
 
-The consolidation imports the iPhone feature changes through `0dcbf32` and the
-isolated Arceus compatibility changes, preserving the legacy uniform zero-bank
-fix from `4ba6add`. Upstream-only changes on the former modern branch are retained
-in its archive tag; this consolidation is not an upstream rebase. Existing
-background builds retain their frozen source and shader chain. They must not be
-silently switched to the consolidated source or have their caches relabelled.
+## Upstream integration and resource compatibility
+
+Upstream `a1693dc4ce3094e89b79da49d6f8f126eec576e9` was fetched and fully merged
+on 2026-11-01, including the previous full integration through `8ea27784`.
+The added upstream fix bounds the Need for Speed Bundle 2 resource reader.
+This is a merge, not a rebase or a claim that merely fetching updated the fork.
+Before each further change batch, fetch and merge the latest upstream in a
+clean isolated checkout, resolve conflicts and test both renderer targets.
+
+The full integration preserves signed executable mappings and per-game
+frameworks, legacy shader reflection/atomic companions, input semantics,
+Chinese settings and exact-build observation IDs. Existing frozen builds and
+installed resources retain their original identities. The merged shader chain
+is `aefa4b269cfc`: **complete matching resources must be rebuilt per game before
+shipping a new host from this source**. Old `ea90` resources cannot be relabelled.
+The source merge itself did not replace installed applications.
 
 ## Build targets
 
-- Default `DM_IOS_RENDERER=legacy`: iOS/iPadOS 16.1 minimum, traditional Metal
-  command encoders. `DM_LEGACY_TARGET=a10x` requires all older-GPU companions;
-  `m2` permits only the documented Apple8 layered rendering and Tier2 sampler
-  capabilities. Both targets reject unsupported native image atomics.
-- `DM_IOS_RENDERER=metal4`: iOS 26 minimum and the modern renderer, including
-  experimental image optical-flow interpolation. It is an explicit build target,
-  not a change to the minimum version of the compatibility build. One source
-  branch does not mean one Metal 4 executable can run on every older device.
-- tvOS source is retained. Current delivery work does not operate TVs.
-
-Exact-build fullscreen and timing adapters remain gated by module identity,
-original instructions and observation sites. The screen XBAY layout, keyboard
-J=A / K=B / U=X / I=Y, Backbone printed letters and controller-connected touch
-hiding are preserved. Chinese labels do not change configuration values.
-
-Changing the shader tools changes `DMSH_CHAIN`. Generate the header and rebuild
-matching resources before packaging a game; never stamp old libraries with the
-new chain. A successful host compile is not a matching resource build.
-
-## Current device failures (2026-10-29)
-
-| Game / target | Confirmed result | Open work |
+| Setting | Deployment minimum | Capability boundary |
 |---|---|---|
-| Arceus / M2, iPadOS 16.1 | Compact binding repair `20261029.5` installed, code/version and saved-state readback passed | User picture confirmation pending; the earlier `.2` gray scene and render-target failure are not presumed resolved |
-| Arceus / A10X, iPadOS 17.7 | Not installed | Two layered and eighteen sampler-limit paths fail the strict resource audit |
-| Pokken / both iPads | `20261029.5` installed on both; user confirms M2 picture restored | Full gameplay/performance and A10X picture remain unverified. Five further exact runtime captures compile in a matching 163-stage set; a later host/package is still required |
-| Need for Speed / both iPads | M2 `20261029.5` installed and verified; A10X retains `.2` after installer rejected `.5` | M2 user retest pending; missing runtime stages and BC readback remain open. A10X upload is preserved for installation diagnostics |
-| Animal Crossing / A10X and M2 | Shader compilation completed; M2 host build in progress | Eleven paths block A10X; M2 native capability audit and installation remain pending |
-| Witcher 3 US / A10X and M2 | Shader compilation completed; M2 host build queued | Eighteen layered paths block A10X; M2 native capability audit and installation remain pending |
+| `DM_IOS_RENDERER=legacy` | iOS/iPadOS 16.1 | Traditional Metal; strict per-game resource checks |
+| `DM_LEGACY_TARGET=a10x` | Inherits legacy minimum | Older-GPU companions required; unsupported layered/sampler/image operations block delivery |
+| `DM_LEGACY_TARGET=m2` | Inherits legacy minimum | Tested M2 iPad capability selection; not an A10X fallback |
+| `DM_IOS_RENDERER=metal4` | iOS/iPadOS 26.0 | Modern backend on compatible hardware; experimental optical-flow interpolation |
 
-The shared legacy recorder/replay mismatch is now reproduced: compact uniform
-and single-vertex bindings were silently ignored. The fixed real-producer test
-passes 252 checks; reverting the four replay changes fails exactly 112 binding
-checks. Version `20261029.5` rebuilds all three affected hosts with the repair,
-retaining each existing shader chain. M2 Pokken's restored picture is user-confirmed; the other target/game pictures remain
-unconfirmed. Full game-route tests remain with the user; no five-game smoke
-or performance result is claimed.
+Source for other platforms is retained. No Switch 2 iPhone/iPad backend is
+verified; upstream Donkey Kong Bananza Mac results are not an iOS result.
 
-Air Arceus `20261029.9` and Z-A `20261029.124` were installed with version and
-save/settings readback. Their modern image-only interpolation remains experimental;
-no stable 120 fps or complete game-HUD isolation is claimed. The user tests
-actual gameplay. An IPA, successful installation or a running frame counter does
-not establish playability. A newly consolidated source revision is not already
-installed on any device.
+## Device evidence and open work — 2026-11-01
 
-Game assets, extracted code, shader libraries, game keys, signing credentials
-and provisioning profiles are not distributed in this repository.
+The following are user/device observations from this fork, not a blanket list
+of supported titles. Installation, shader compilation and successful gameplay
+are recorded separately. Older [renderer checkpoints](ios16-compatibility.md)
+remain available as historical evidence.
 
-## Consolidation checks
+| Game / target | Confirmed evidence | Remaining limits |
+|---|---|---|
+| Need for Speed / M2 and Air | User confirms gameplay after missing runtime shader resources were delivered | Intermittent scenery artifacts and audio stalls reported; no complete performance/stability pass |
+| Pokken / M2 | User confirms picture restored after matching runtime stages were supplied | Broader scenes, A10X and long-run stability not certified |
+| Animal Crossing / M2 | User confirms playable | Air executable-image repair installed; post-update gameplay unconfirmed |
+| Witcher 3 / M2, iPadOS 16.1 | User now confirms playable after full SDK, shader companion, binding and installed entitlement repairs | 30 FPS and remaining picture anomalies reported; frame timing and rendering still under investigation |
+| Arceus / Air | User confirms third-person picture restored in the unified app | Reproducible task-end null-object crash remains open; diagnostic tracing is not a root-cause fix |
+| Arceus / A10X, iPadOS 17.7 | Not installed | Two layered vertex and eighteen sampler-limit paths fail the resource audit |
+| Z-A / iPhone/iPad | Multiple device packages installed with code/table/save readback | Do not infer all scenes or older-GPU combinations are stable from installation |
+| Tsukihime / M2 and Air | Matching resources audited and hosts compiled | Complete resource delivery and gameplay not verified |
+| Other newly built titles | Several shader builds completed | Per-device resource audit, signed host/table binding, delivery and user testing still required |
 
-The unified source passes both complete unsigned synthetic iOS builds: minimum
-OS 16.1 without the modern frame-generator class, and minimum OS 26.0 with it.
-The fixture tests compile Swift, link the real host and stage synthetic resources;
-they do not contain or launch a game. Tool tests: 491 run/17 skipped; graphics
-Python tests: 96 run/4 skipped; iOS tests: 82 passed. Host service, timing and
-display tests and both EGL import modes pass. Python lint reports zero new
-findings without changing its baseline.
+Full-game performance and correctness need the actual game/version/device.
+A successful source build, IPA, cover, directory or FPS counter is not a
+playability result. Broad frame-rate removal is still being validated against
+each game's simulation clock; no stable 120 FPS is promised.
 
-M4 GPU checks cover optical flow in RGBA/BGRA (18 each), paired presentation with
-and without MetalFX (14 each), secondary blend sources (130), and three-pass
-legacy image shadow/discard/copyback (610). These establish the tested resource
-semantics on M4, not A10X playability. The user requested gameplay testing remain
-with them; no multi-game gameplay route is claimed. The new shared shader chain
-must be rebuilt per game before a delivery from this branch can be installed.
+## Non-Switch runtimes in TonTon
 
-### Need for Speed follow-up (2026-10-29)
+GTA uses a separate native engine, not the Nintendo conversion pipeline.
+The current Dawn integration requires iOS 17 or newer; an iOS 16 renderer port
+is still open. Air engine packaging does not establish complete data delivery.
 
-M2 `.5` remains black by user report. A10X `.5` eventually registered despite
-the earlier installer error; code/version and saved-state fingerprints were
-read back without another installation. Ten exact runtime stages are now
-translated in a complete 99-stage matching resource set. The legacy CPU-written
-BC readback omission is fixed and tested separately; `.6` packaging/install and
-device picture confirmation are pending. No claim of playable NFS follows.
+Full Red Alert 2 and Yuri's Revenge are being integrated through a separate
+static x86 recompilation/Win32 compatibility route. Both native engine
+frameworks compile for iOS 16.1. M2 non-game probes verify memory, fonts,
+storage and framework loading without calling the game entry. SDL lifecycle,
+return-to-library, input, suspend/resume and full campaigns still need work.
+The existing browser/Wine route can start but has severe performance problems;
+it is not presented as the finished native solution.
 
-### Shared external-input visibility (2026-10-29)
+## Validation scope
 
-The user confirms Animal Crossing M2 `20261029.1` plays. All iPhone/iPad
-hosts now give both physical keyboards and extended controllers precedence
-over keep-touch, without changing touch geometry or native button bits.
-The policy truth table, keyboard mappings and face-layout tests pass. Frozen
-frontends and future batch sources have the same header; existing installed
-binaries still need their host update. Game compilation continues separately.
+The full upstream merge passed 110 tool/iOS Python test files (1,020 cases),
+37 graphics Python files (189 cases), the production host suite and 284 real
+legacy GPU checks. Optional dependency skips remain. Five-profile unified-host
+Xcode builds passed for both deployment targets, iOS 16.1 and modern Metal 4.
+Those are unsigned synthetic fixtures without commercial assets; they were not
+installed or presented as working game releases. The five-game regression
+harness was attempted but blocked by missing local game builds, so no complete
+five-game gameplay result is claimed.
+
+Screen XBAY layout and Backbone printed-letter semantics are preserved.
+Keyboard J=A / K=B / U=X / I=Y and Return=A / Backspace=B are retained; hardware
+keyboard/controller presence hides touch controls. Chinese labels preserve
+underlying configuration values. Frame generation is experimental image optical
+flow, not native MetalFX frame interpolation. Game assets, extracted code,
+shader libraries, keys, saves and signing credentials are not distributed here.
