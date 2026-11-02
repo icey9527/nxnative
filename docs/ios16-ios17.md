@@ -60,11 +60,11 @@ need their own renderer validation; the NVN audit is not blanket coverage.
 For a conservative older-device build:
 
 ```sh
-DM_IOS_RENDERER=legacy DM_LEGACY_TARGET=a10x DM_PSO_GPUS=none \
-  python3 scripts/build_ipa_from_nsp.py /path/to/YourGame -k /path/to/prod.keys
+DM_IOS_RENDERER=legacy DM_LEGACY_TARGET=a10x \
+  python3 scripts/build_ipa_from_nsp.py /path/to/YourGame -k /path/to/prod.keys --gpu none
 ```
 
-For the M2 capability target, replace `a10x` with `m2`. `DM_PSO_GPUS=none`
+For the M2 capability target, replace `a10x` with `m2`. `--gpu none`
 avoids building a modern offline PSO archive for the legacy renderer. The
 script prepares the rewritten modules, matching shader libraries, resource
 companions and host. Unregistered games receive provisional profiles; the IPA

@@ -71,8 +71,8 @@ python3 -m pip install lz4 "capstone>=5,<6" fonttools nsz zbic "backports.zstd; 
 **3. Build**, with your game folder and your `prod.keys`:
 
 ```
-DM_IOS_RENDERER=legacy DM_LEGACY_TARGET=a10x DM_PSO_GPUS=none \
-  python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys
+DM_IOS_RENDERER=legacy DM_LEGACY_TARGET=a10x \
+  python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --gpu none
 ```
 
 For the tested M2 iPad capability target, use `DM_LEGACY_TARGET=m2`; do not select it for A10X. For a modern build, select `DM_IOS_RENDERER=metal4` explicitly. See the [compatibility guide](docs/ios16-ios17.md) before choosing a target.
