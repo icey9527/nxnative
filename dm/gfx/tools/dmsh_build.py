@@ -653,7 +653,7 @@ def decode_tex(name):
     words = [o0] + ([o1] if ty else [])
     if re.match(r'[a-z]+_i', name):   # image
         return next((slot(x, IMG_BASE, tb) for x in words if IMG_BASE <= x * 4 < IMG_BASE + abi.C2_ROW * IMG_SLOTS and slot(x, IMG_BASE, tb) is not None), None), None, ty
-    tw = [o0] if ty == 3 else words
+    tw = [o0] if ty in (2, 3) else words
     t = next((slot(x, TEX_BASE, tb) for x in tw if slot(x, TEX_BASE, tb) is not None and x * 4 < SEPTEX_BASE), None)
     if t is None: t = next((SEPTEX_SLOT0 + slot(x, SEPTEX_BASE, tb) for x in tw if slot(x, SEPTEX_BASE, tb) is not None and x * 4 < SAMP_BASE), None)
     s = next((slot(x, SAMP_BASE, sb) for x in words if x * 4 >= SAMP_BASE and slot(x, SAMP_BASE, sb) is not None), None) if ty != 3 else None
@@ -677,6 +677,15 @@ def decode_ubo_tex(name):
     o0, o1, ty = h & 0x3fff, (h >> 14) & 0x3fff, h >> 28
     if not 3 <= tb <= 16 or ty not in (0, 1, 3) or (ty == 1 and not 3 <= sb <= 16): return None
     return (tb - 3, o0 * 4), (('id', o1) if ty == 3 else (sb - 3, o1 * 4) if ty else (tb - 3, o0 * 4))
+
+def mixed_sampler(name):
+    """Type 2: driver texture handle plus raw sampler ID in a guest cbuf."""
+    m = re.fullmatch(r'[a-z]+_t\w*?_cb(\d+)_([0-9A-F]+)Smplr', name)
+    if not m: return None
+    banks, handle = int(m.group(1)), int(m.group(2), 16)
+    bank = (banks >> 16) - 1
+    if banks & 0xffff != 2 or handle >> 28 != 2 or not 3 <= bank <= 16: return None
+    return bank - 3, ((handle >> 14) & 0x3fff) * 4
 
 def c2_array(name, ty):
     """An array of handles in the driver table c2 that the shader indexes at run time (Ryujinx's texture array from a buffer, here bank 2: <stage>_t<type>_cb<slots>_<handle>, declared
@@ -760,6 +769,9 @@ def reflect(key, stage, msl, res):
             e.update(kind=abi.KIND_CBUF, reg=n - 3) if 3 <= n <= 16 else e.update(kind=abi.KIND_C1 if n == 1 else abi.KIND_DRVCB, bank=n)
         elif re.fullmatch(r'[a-z]+_s(\d+)', nm):
             e.update(kind=abi.KIND_SBUF, index=int(re.fullmatch(r'[a-z]+_s(\d+)', nm).group(1)))
+        elif ty == 'sampler' and mixed_sampler(nm) is not None:
+            reg, off = mixed_sampler(nm)
+            e.update(kind=abi.KIND_SAMP_UBO, reg=reg, off=off, samp_raw=True)
         elif decode_ubo_tex(nm[:-5] if nm.endswith('Smplr') else nm):   # bindless: the handle is in a uniform buffer (reg = uniform slot, off = byte offset)
             ut, us = decode_ubo_tex(nm[:-5] if nm.endswith('Smplr') else nm)
             if nm.endswith('Smplr'): e.update(kind=abi.KIND_SAMP_ID, reg=us[1]) if us[0] == 'id' else e.update(kind=abi.KIND_SAMP_UBO, reg=us[0], off=us[1])
@@ -1026,7 +1038,7 @@ def fs_dual(src):
 def fs_uint(src):
     """Integer colour targets. With no PC version the translator declares every fragment output float; a shader writes an integer as the float with its bits (as_type<float>(…)), and Metal
     refuses a pipeline whose float output meets an integer attachment. Luigi's Mansion 3 draws its whole scene into an R32Uint + RGBA8Uint G-buffer (1,377 of its 4,307 pixel shaders write
-    an output from integer bits): a hand-written row per shader (shader_facts_manual.tsv) does not scale to that. A pixel shader that writes an output from integer bits gets a second entry
+    an output from integer bits): a hand-written row per shader (shader_facts_manual.tsv) does not scale to that. Every colour-writing pixel shader gets a second entry
     point, main0_u, the same body returning every colour output as the unsigned integer vector of the same bits (as_type, nothing converted); the host takes it for a pipeline whose colour
     attachments are all unsigned integer formats (nvn_mtl.m).
     A G-buffer may mix the two: Pokémon Sword's scene shaders write colour 0 and 2 as floats and colour 1 from integer bits into an RGBA16Uint target. A shader whose outputs include both
@@ -1036,11 +1048,12 @@ def fs_uint(src):
     if not m or not st: return None, 0
     mem = re.findall(r'^\s*(\w+)\s+(\w+)\s*(\[\[[^\]]*\]\])?;', st.group(1), re.M)
     cols = {nm: ty for ty, nm, at in mem if 'color(' in at and ty.startswith('float')}
-    # The hardware writes an output's bits to an integer target whatever the shader computed, so main0_u is right for any pixel shader; only those that look like integer writers get one
-    # (the library stays small): an output from integer bits, or nothing but constants (a clear drawn into an integer target, 35e1865e313f0553 writes 0 into Luigi's Mansion 3's R32Uint target)
+    # The hardware writes output bits to an integer target whatever was computed;
+    # sampled/arithmetical float bits can also be written to integer attachments.
+    # Package the alternate entry for all colour writers; the bound target, not
+    # a source-code heuristic, determines whether replay selects it.
     from_int = {nm for nm in cols if re.search(r'\bout\.%s(?:\.\w+)? = as_type<float\d?>\(' % nm, src)}
-    writes = [m.group(1) for nm in cols for m in re.finditer(r'\bout\.%s(?:\.\w+)? = ([^;]+);' % nm, src)]
-    if not from_int and not (writes and all(re.fullmatch(r'-?[0-9.]+f?|float\d\([-0-9., ]*\)', w.strip()) for w in writes)): return None, 0
+    if not cols: return None, 0
     uty = lambda ty: 'u' + ty.replace('float', 'int')   # float4 → uint4, float → uint
     def entry(sfx, as_uint):   # main0 again as main0_<sfx>, returning the outputs in as_uint as the unsigned integer vectors of their bits (dmsh_fetch.py cuts the source at main0_out_u)
         struct = f'struct main0_out_{sfx}\n{{\n' + ''.join(f'    {uty(cols[nm]) if nm in as_uint else ty} {nm} {at};\n' for ty, nm, at in mem) + '};\n\n'

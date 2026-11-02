@@ -3499,7 +3499,7 @@ static void shmap_load(void) {
     warm_start();
 }
 
-@interface NvShader : NSObject { @public id<MTLFunction> fn, tf_fn, fn_d; uint16_t tf_stride[4]; nvn_refl rf; id<MTLArgumentEncoder> ae; NSUInteger arg_len; int stage, range_ro, afr, depth_out, has_dual, specialized, slice_variant, zero_image_variant, zero_image_aid, zero_image_reg, zero_image_format; const char *builtin; uint64_t logged; char key[24]; id<MTLBuffer> c1buf; uint64_t c1_gpu; size_t c1off;
+@interface NvShader : NSObject { @public id<MTLFunction> fn, tf_fn, fn_d, fn_u; uint16_t tf_stride[4]; nvn_refl rf; id<MTLArgumentEncoder> ae; NSUInteger arg_len; int stage, range_ro, afr, depth_out, has_dual, specialized, slice_variant, zero_image_variant, zero_image_aid, zero_image_reg, zero_image_format; const char *builtin; uint64_t logged; char key[24]; id<MTLBuffer> c1buf; uint64_t c1_gpu; size_t c1off;
     id<MTLFunction> nonpoint_fn; id<MTLLibrary> nonpoint_lib; NSError *nonpoint_error; int nonpoint_tried;
     id<MTLFunction> min_reduction_fn; id<MTLLibrary> min_reduction_lib; int min_reduction_tried, min_reduction_last, min_reduction_notes;
     int min_reduction_bound, min_reduction_sid, min_reduction_tid, min_reduction_pso_failed;
@@ -3729,6 +3729,13 @@ static NvShader *shader_load(NSString *pc, int stage) {
         if (j[@"entry_d"]) o->fn_d = [lib newFunctionWithName:j[@"entry_d"]];
         if (o->fn_d.functionConstantsDictionary.count)
             o->fn_d = [lib newFunctionWithName:j[@"entry_d"] constantValues:[MTLFunctionConstantValues new] error:&e];
+        if (j[@"entry_u"]) {
+            o->fn_u = [lib newFunctionWithName:j[@"entry_u"]];
+            if (o->fn_u.functionConstantsDictionary.count)
+                o->fn_u = [lib newFunctionWithName:j[@"entry_u"] constantValues:[MTLFunctionConstantValues new] error:&e];
+            if (!o->fn_u) MLOG("[RED] Shader %s integer-output entry %s unavailable: %s", pc.UTF8String,
+                               [j[@"entry_u"] UTF8String], e.localizedDescription.UTF8String ?: "function missing");
+        }
     }
     if (o->fn.functionConstantsDictionary.count) {
         MTLFunctionConstantValues *values = [MTLFunctionConstantValues new];
@@ -4460,6 +4467,21 @@ static int hilite_index(NvShader *fs) {
     return -1;
 }
 static int pf_int_kind(MTLPixelFormat f);
+// The translator packages an unsigned-integer fragment entry alongside main0.
+// Use it only when every attachment written by this fragment is an unsigned
+// integer target. In a merged pass, the key maps physical slots to the
+// fragment's logical output locations.
+static int legacy_pso_all_uint(const pso_key *k, NvShader *fs, int merged) {
+    int written = 0;
+    for (int i = 0; i < 8; i++) {
+        if (!k->cfmt[i]) continue;
+        int l = merged ? k->lmap[i] : i;
+        if (l == 0xff || (fs->rf.color_known && !(fs->rf.color_mask >> l & 1))) continue;
+        if (pf_int_kind((MTLPixelFormat)k->cfmt[i]) != 1) return 0;
+        written++;
+    }
+    return written > 0;
+}
 static int blend_reads_src1(blend_st b) {
     return blend_zero_src1(b.src_rgb) != b.src_rgb || blend_zero_src1(b.dst_rgb) != b.dst_rgb ||
         blend_zero_src1(b.src_a) != b.src_a || blend_zero_src1(b.dst_a) != b.dst_a;
@@ -4505,6 +4527,8 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
         d.fragmentFunction = g_hilite_fs[hi];
         if (g_hilite_full && g_hilite_vs) d.vertexFunction = g_hilite_vs;
     }
+    if (fs && fs->fn_u && !fsfn && d.fragmentFunction == fs->fn && legacy_pso_all_uint(k, fs, merged))
+        d.fragmentFunction = fs->fn_u;
     int dual = fs && fs->has_dual && !fsfn && d.fragmentFunction == fs->fn && k->cfmt[0] &&
         (!merged || k->lmap[0] == 0) && (k->blend_en & 1) && !pf_int_kind(k->cfmt[0]) && blend_reads_src1(k->blend[0]);
     if (dual) { d.fragmentFunction = legacy_dual_function(fs); if (!d.fragmentFunction) return nil; }

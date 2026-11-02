@@ -11,16 +11,16 @@ import dmsh_abi
 import dmsh_geometry
 
 
-def builder_reflection():
+def builder_reflection(which="reflect"):
     # Isolate pure reflection code from the builder's CLI/profile initialization.
     tree = ast.parse((TOOLS / 'dmsh_build.py').read_text())
-    names = {'reflect', 'decode_tex', 'decode_ubo_tex', 'const_sampler', 'c2_array'}
+    names = {'reflect', 'decode_tex', 'decode_ubo_tex', 'const_sampler', 'c2_array', 'mixed_sampler', 'fs_uint'}
     selected = [n for n in tree.body if (isinstance(n, ast.FunctionDef) and n.name in names)
                 or (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'SSBO' for t in n.targets))
                 or (isinstance(n, ast.Assign) and any(isinstance(t, ast.Tuple) and any(isinstance(e, ast.Name) and e.id == 'TEX_BASE' for e in t.elts) for t in n.targets))]
     ns = {'re': re, 'dmsh_geometry': dmsh_geometry, 'abi': dmsh_abi}
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(TOOLS / 'dmsh_build.py'), 'exec'), ns)
-    return ns['reflect']
+    return ns[which]
 
 
 REFLECT = builder_reflection()
@@ -33,6 +33,26 @@ def bindings(stage, offsets, flags, cb_slot=0):
                       'cb_offset': off // 4, 'flags': flag}
                      for i, (off, flag) in enumerate(zip(offsets, flags))]}
     return REFLECT('synthetic', stage, source, res)
+
+
+class IntegerOutputs(unittest.TestCase):
+    def test_sampled_float_bits_also_get_an_integer_entry(self):
+        src = "struct main0_out\n{\n    float4 color [[color(0)]];\n};\nfragment main0_out main0() { main0_out out; out.color = float4(sin(0.5)); return out; }\n"
+        generated, mask = builder_reflection('fs_uint')(src)
+        self.assertIn('fragment main0_out_u main0_u(', generated)
+        self.assertIn('as_type<uint4>(out.color)', generated)
+        self.assertEqual(mask, 0)
+        self.assertTrue(generated.startswith(src))
+
+
+class MixedSampler(unittest.TestCase):
+    def test_type2_offsets_do_not_alias_texture_slots(self):
+        # Sampler word 10 happens to decode as combined texture slot 1. Only
+        # word 0x5a names the texture; the sampler is raw c7 word 10.
+        src = 'struct spvDescriptorSetBuffer0\n{\n    texture2d<float> cp_t_cb524290_2002805A [[id(1)]];\n    sampler cp_t_cb524290_2002805ASmplr [[id(2)]];\n};\n'
+        got = REFLECT('synthetic', 'cs', src, {'sbufs': []})
+        self.assertEqual((got[0]['kind'], got[0]['reg']), ('tex', 128))
+        self.assertEqual((got[1]['kind'], got[1]['reg'], got[1]['off'], got[1]['samp_raw']), ('samp_ubo', 4, 40, True))
 
 
 class StorageBuffers(unittest.TestCase):

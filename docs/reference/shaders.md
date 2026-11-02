@@ -1358,3 +1358,30 @@ and four GPU draws: changing the same guest word selects nearest, linear, then
 nearest filtering, followed by a draw using a different descriptor pool. The real
 recorder test also switches between two pools in both directions. These host tests establish the binding fix, not a device
 playability result.
+
+
+## Mixed driver textures and guest sampler IDs
+
+**Symptom:** route-B reflection rejects a type-2 sampler with an unresolved slot;
+compute dispatch then has no mapped program. A sampled texture may also be bound
+to an unrelated combined slot.
+
+**Cause:** a type-2 handle stores the texture word in driver c2 and a raw sampler
+ID in a separate guest constant bank. `decode_tex` considered both offsets as
+possible texture words. When the sampler offset happened to name a combined
+texture slot, it won over the actual separate texture. The sampler's bank was
+not represented in generated reflection.
+
+**Fix:** only the first offset selects a texture for type 2. Reflect the second
+bank/offset as `samp_ubo` with `samp_raw=true`; replay masks the unshifted 12-bit
+sampler ID. Reject unresolved/unsupported encodings instead of assigning slot 0.
+The legacy renderer also loads packaged unsigned fragment entries and selects
+one only when all written attachments are unsigned integer formats. Package
+that alternate entry for every colour writer: sampled float bits can reach an
+integer attachment too, so source-expression heuristics are insufficient.
+
+**Found on:** Witcher 3 US 4.04a/b on M2/iPadOS 16.1. The current log's compute
+handle used guest uniform slot 4, byte 40; its texture was separate slot 128, not
+combined slot 1. An R16Uint pass separately rejected a float fragment output.
+Synthetic production-parser, production-descriptor and GPU readback tests pass;
+matching-chain full resources and device picture verification remain required.

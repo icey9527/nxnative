@@ -105,7 +105,7 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
             // byte offset ÷ 8, an NVN handle being 64-bit). Paper Mario: The Thousand-Year Door's reflection shaders: array<texture2d<float>, 32> fp_t2d_cb14_0, the handles of uniform slot 11
             else if ([k isEqualToString:@DMSH_KIND_TEX_UBO]) { r->kind = NVN_RB_TEXU; dummy_kind(el, &r->dtt, &r->dpf); r->off = (uint16_t)[b[@"off"] intValue]; o->bindless = 1;
                 if (n) { if (n > 32) FAIL("B binding %s: array of %d", nm.UTF8String, n); r->n = (uint8_t)n; } }
-            else if ([k isEqualToString:@DMSH_KIND_SAMP_UBO]) { r->kind = NVN_RB_SAMPU; r->off = (uint16_t)[b[@"off"] intValue]; o->bindless = 1;
+            else if ([k isEqualToString:@DMSH_KIND_SAMP_UBO]) { r->samp_raw = [b[@"samp_raw"] boolValue]; r->kind = NVN_RB_SAMPU; r->off = (uint16_t)[b[@"off"] intValue]; o->bindless = 1;
                 if (n) { if (n > 32) FAIL("B binding %s: array of %d", nm.UTF8String, n); r->n = (uint8_t)n; } }
             else if ([k isEqualToString:@DMSH_KIND_SAMP_ID]) r->kind = NVN_RB_SAMPI;
             // The pools, indexed by the handle's IDs (nvn_refl.h TEXP / SAMPP): which texture is read is known only when the GPU runs the draw

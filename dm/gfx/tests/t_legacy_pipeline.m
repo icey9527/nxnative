@@ -214,6 +214,51 @@ static void guest_sampler_id_draw(id<MTLFunction> vertex) {
     mtl_pool_del(words);free(words);mtl_reg_tex(3,NULL,NULL);mtl_tex_release(&input);mtl_tex_release(&output);state_reset();memset(&R,0,sizeof R);
 }
 
+// Exercise the production integer-entry choice with the R16Uint target that
+// rejected Witcher's depth/composite pass, and keep normalized targets intact.
+static void integer_entry_draw(id<MTLFunction> vertex) {
+    NSError *error=nil;
+    NSString *source=@"#include <metal_stdlib>\nusing namespace metal;\n"
+        "fragment float4 f() { return float4(0.25); }\n"
+        "fragment uint4 fu() { return uint4(513); }\n";
+    id<MTLLibrary> lib=[g_dev newLibraryWithSource:source options:nil error:&error];
+    CHECK(lib!=nil,"integer-entry fixtures compile"); if (!lib) return;
+    NvShader *vs=[NvShader new],*fs=[NvShader new]; vs->fn=vertex;
+    fs->fn=[lib newFunctionWithName:@"f"];fs->fn_u=[lib newFunctionWithName:@"fu"];
+    fs->rf.color_known=1;fs->rf.color_mask=1;
+    pso_key k={0};k.samples=1;k.chmask=15;k.cfmt[0]=MTLPixelFormatR16Uint;
+    MTLRenderPipelineDescriptor *d=pso_desc(&k,vs,fs,nil,0);
+    CHECK(d.fragmentFunction==fs->fn_u,"unsigned attachment selects packaged integer entry");
+    id<MTLRenderPipelineState> ps=[g_dev newRenderPipelineStateWithDescriptor:d error:&error];
+    CHECK(ps!=nil,"R16Uint pipeline is accepted");
+    if(ps) {
+        MTLTextureDescriptor *td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR16Uint width:4 height:4 mipmapped:NO];
+        td.storageMode=MTLStorageModeShared;td.usage=MTLTextureUsageRenderTarget;
+        id<MTLTexture> t=[g_dev newTextureWithDescriptor:td];
+        MTLRenderPassDescriptor *rp=[MTLRenderPassDescriptor renderPassDescriptor];
+        rp.colorAttachments[0].texture=t;rp.colorAttachments[0].loadAction=MTLLoadActionClear;rp.colorAttachments[0].storeAction=MTLStoreActionStore;
+        id<MTLCommandBuffer> cb=[[g_dev newCommandQueue] commandBuffer];
+        id<MTLRenderCommandEncoder> enc=[cb renderCommandEncoderWithDescriptor:rp];
+        [enc setRenderPipelineState:ps];[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];[enc endEncoding];
+        [cb commit];[cb waitUntilCompleted];CHECK(cb.status==MTLCommandBufferStatusCompleted,"integer entry draw completes");
+        uint16_t pixels[16]={0};[t getBytes:pixels bytesPerRow:8 fromRegion:MTLRegionMake2D(0,0,4,4) mipmapLevel:0];
+        int exact=1;for(int i=0;i<16;i++)exact&=pixels[i]==513;CHECK(exact,"R16Uint pixels retain integer values");
+    }
+    k.cfmt[0]=MTLPixelFormatRGBA8Unorm;
+    CHECK(pso_desc(&k,vs,fs,nil,0).fragmentFunction==fs->fn,"normalized output keeps float entry");
+    k.cfmt[0]=MTLPixelFormatR16Sint;
+    CHECK(pso_desc(&k,vs,fs,nil,0).fragmentFunction==fs->fn,"signed target does not use unsigned entry");
+    k.cfmt[0]=MTLPixelFormatR16Uint;k.cfmt[1]=MTLPixelFormatRGBA8Unorm;
+    CHECK(pso_desc(&k,vs,fs,nil,0).fragmentFunction==fs->fn_u,"unwritten normalized attachment is ignored");
+    fs->rf.color_mask=3;
+    CHECK(pso_desc(&k,vs,fs,nil,0).fragmentFunction==fs->fn,"mixed written targets do not use unsigned entry");
+    fs->rf.color_mask=1;k.cfmt[1]=0;k.lmap[0]=0xff;
+    CHECK(pso_desc(&k,vs,fs,nil,1).fragmentFunction==fs->fn,"unmapped merged output is not an integer write");
+    k.lmap[0]=0;
+    CHECK(pso_desc(&k,vs,fs,nil,1).fragmentFunction==fs->fn_u,"merged output location selects integer entry");
+    CHECK(pso_desc(&k,vs,fs,fs->fn,0).fragmentFunction==fs->fn,"explicit fragment override remains intact");
+}
+
 int main(int argc, char **argv) { @autoreleasepool {
     if (argc > 1 && !strcmp(argv[1], "--cpu-only")) {
         cpu_pool_bc_readback();
@@ -232,6 +277,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     vs->fn = [lib newFunctionWithName:@"v"];
     fs->fn = [lib newFunctionWithName:@"f"];
     fs->rf.color_known = 1; fs->rf.color_mask = 1;
+    integer_entry_draw(vs->fn);
     format_view_draw(vs->fn);
     guest_sampler_id_draw(vs->fn);
     pso_key k = {0}; k.samples = 1; k.chmask = 15; k.blend_en = 1; k.cfmt[0] = MTLPixelFormatRGBA16Float;

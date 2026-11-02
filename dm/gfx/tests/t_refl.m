@@ -108,6 +108,15 @@ int main(void) { @autoreleasepool {
             }
         }
     }
+    { // Exact compute handle encoding seen in Witcher's current M2 log.
+        NSArray *bs=@[
+            @{@"kind":@"tex",@"reg":@128,@"arg_id":@1,@"msl_name":@"cp_t_cb524290_2002805A",@"msl_type":@"texture2d<float>"},
+            @{@"kind":@"samp",@"reg":NSNull.null,@"arg_id":@2,@"msl_name":@"cp_t_cb524290_2002805ASmplr",@"msl_type":@"sampler"}];
+        check("compute mixed sampler resolves",0,nvn_refl_from_json(@{@"route":@"B",@"bindings":bs},&r,err,sizeof err));
+        check("compute sampler guest uniform slot",4,r.b[1].reg);
+        check("compute sampler byte offset",40,r.b[1].off);
+        check("compute sampler uses raw ID",1,r.b[1].samp_raw);
+    }
     {   int f1 = fail;
         NSDictionary *b1 = @{@"route": @"B", @"bindings": @[@{@"kind": @"foo", @"arg_id": @0, @"msl_name": @"x", @"msl_type": @"constant _16*"}]};
         NSDictionary *b2 = @{@"route": @"B", @"bindings": @[@{@"kind": @"tex", @"reg": [NSNull null], @"arg_id": @0, @"msl_name": @"fp_t_x", @"msl_type": @"texture2d<float>"}]};
