@@ -18,3 +18,7 @@ dm/gfx/tests/t_framegen*.dSYM/
 
 /dm/gfx/tests/t_legacy_initial_content
 /dm/gfx/tests/t_legacy_initial_content.dSYM/
+# coverage.py data and its JSON report (pyproject.toml, [tool.coverage.run])
+.coverage
+.coverage.*
+/coverage.json

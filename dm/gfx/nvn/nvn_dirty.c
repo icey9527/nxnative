@@ -38,7 +38,7 @@ static _Atomic uint64_t g_adds_total;
 static _Atomic int g_live, g_live_peak;   // number of registered pools and peak (for the memory readout line)
 void nvn_dirty_stat(int *live, int *peak, int *cap) { *live = atomic_load(&g_live); *peak = atomic_load(&g_live_peak); *cap = MAX_RANGE; }
 static _Atomic int g_overflow_logged;
-static pthread_mutex_t g_slot_mu = PTHREAD_MUTEX_INITIALIZER;   // Pool creation / destruction (guest threads, possibly concurrent) pick slots under a mutex; the page-fault handling path does not touch it
+static pthread_mutex_t g_slot_mu = PTHREAD_MUTEX_INITIALIZER;   // Pool creation, retirement and protection serialize descriptor lifetime; the page-fault path does not touch this mutex
 static _Atomic uint64_t g_mp_calls, g_mp_pages, g_mp_ticks;   // This module's mprotect: call count, pages covered, time spent (mach timebase, safe in the page-fault path too)
 static void mp(uintptr_t a, size_t len, int prot) {
     uint64_t t = mach_absolute_time(); mprotect((void *)a, len, prot);

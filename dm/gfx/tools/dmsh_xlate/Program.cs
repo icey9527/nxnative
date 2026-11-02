@@ -6,6 +6,7 @@
 //   This used to rewrite for GL always: a near=0 game's depth was squeezed into 0.5..1, and effects that turn depth into distance (Link's Awakening's outdoor depth of field blurring the whole screen, occlusion) were all wrong.
 // Usage: dmsh_xlate <job.json> <output dir>
 //   Job: [{ "key", "stage": "vs|ps|cs", "code": machine code file (graphics = 0x50-byte SPH + instructions, compute = instructions),
+//           "arch": "sm86" for Ampere code (NVN2, Switch 2: a 0x80-byte SPH and 128-bit instructions; absent = Maxwell),
 //           "tex": { "slot": "2d|2darray|cube|cubearray|3d|buffer|1d|1darray|2dms|2dmsarray", ... }, "img": { "slot": { "type", "fmt" } },
 //           "attr": { "location": "float|sint|uint" }, "fout": { "target": "float|sint|uint" }, "local": [x, y, z] }]
 //   Output: <key>.spv and <key>.res.json (offsets of storage buffer slots in c0, etc.; decoding texture handle → slot number is done in the script that builds the metallib;
@@ -16,6 +17,7 @@ using Ryujinx.Graphics.Shader.Translation;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -25,6 +27,9 @@ static class SwshXlate
     // NVN's handle tables in c[2], byte offsets, 8 bytes per slot (one layout in every game, see dm/gfx/tools/dmsh_build.py): combined textures 0x20 + 8 r, images 0x120 + 8 r (8 slots),
     // separate textures 0x168 + 8 r (slot 128 + r), separate samplers 0x568 + 8 r
     const int TexBase = 0x20, ImgBase = 0x120, ImgSlots = 8, SepTexBase = 0x168, SepTexSlot0 = 128, SampBase = 0x568;
+    // Handle words in c[2]: one every 8 bytes up to the end of the separate sampler table (128 slots), 301 in all. An array of c[2] handles the shader indexes at run time (Ryujinx's
+    // texture array from a buffer, BindlessToArray: the index is the handle's byte offset ÷ 8) has one element per word, so any word the shader computes is in it
+    const int C2HandleWords = (SampBase + 8 * 128) / 8;
 
     sealed class Accessor : IGpuAccessor
     {
@@ -42,6 +47,8 @@ static class SwshXlate
             return types;
         }
         // c1 constant segment (the 0x100 bytes before the control segment in the shader package): the jump table of indirect jump BRX lives here (LDC c[1]); without it the translator cannot resolve jump targets and control flow goes wrong (particle shaders loop forever)
+        public int QueryConstantBuffer1Size() => _c1.Length;
+        public int[] QueryAmpereComputeC0Layout() => _job["nvn2_cs"] is JsonArray l ? l.Select(v => (int)v).ToArray() : null;
         public uint ConstantBuffer1Read(int offset) { if (offset >= 0 && offset + 4 <= _c1.Length) return BitConverter.ToUInt32(_c1, offset); Notes.Add($"c1 read out of bounds +{offset:X} (c1 length {_c1.Length})"); return 0; }
         // All resources go into set 0, each with a distinct binding number (spirv-cross emits them as one argument buffer); the translator's convention of giving the buffer of constant segment number index binding = index+1 is not relied on
         // The translator's own messages (a bindless read it resolved, or could not and removed, its result 0; an invalid encoding) go into the notes, marked, which dmsh_build.py counts apart
@@ -51,9 +58,13 @@ static class SwshXlate
         public SetBindingPair CreateStorageBufferBinding(int index) => new(0, _binding++);
         public SetBindingPair CreateTextureBinding(int count, bool isBuffer) { int b = _binding; _binding += count; return new(0, b); }
         public ReadOnlySpan<ulong> GetCode(ulong address, int minimumSize) => MemoryMarshal.Cast<byte, ulong>(new ReadOnlySpan<byte>(_code)[(int)address..]);
-        public int QuerySamplerArrayLengthFromPool() => 32;
-        public int QueryTextureArrayLengthFromBuffer(int slot) => 32;
-        public int QueryTextureArrayLengthFromPool() => 32;
+        // A texture read whose handle the translator cannot trace to one slot indexes the texture and sampler pools by the handle's IDs (20 and 12 bits); dmsh_build.py turns these
+        // arrays into pointers to the pools the replay keeps (pool_arrays), with a run-time bound, so the lengths are the whole ID ranges
+        public int QuerySamplerArrayLengthFromPool() => 1 << 12;
+        // c[2]: every handle word (C2HandleWords). EA SPORTS FC 27's lights index separate texture i as element 45 + i (c2 byte 0x168 + 8 i), which 32 elements clamped to element 31.
+        // Other buffers (the game's own uniform buffers, read through the handles' byte offsets as well) keep 32
+        public int QueryTextureArrayLengthFromBuffer(int slot) => slot == 2 ? C2HandleWords : 32;
+        public int QueryTextureArrayLengthFromPool() => 1 << 20;
 
         string Get(string table, int slot) => _job[table] is JsonObject t && t[slot.ToString()] is JsonNode n ? (n is JsonObject o ? (string)o["type"] : (string)n) : null;
         // A handle's texture or image slot, numbered as dmsh_build.py decode_tex numbers the reflection's (so an answer table row names the slot the reflection shows): the handle ORs two
@@ -117,7 +128,8 @@ static class SwshXlate
             Array32<AttributeType> attr = default; Array8<AttributeType> fout = default;
             if (_job["attr"] is JsonObject a) foreach (var kv in a) attr[int.Parse(kv.Key)] = Attr((string)kv.Value);
             if (_job["fout"] is JsonObject f) foreach (var kv in f) fout[int.Parse(kv.Key)] = Attr((string)kv.Value);
-            return new GpuGraphicsState(false, _job["geometry_topology"] is JsonNode gt ? (InputTopology)(int)gt : InputTopology.Triangles, false, TessPatchType.Triangles, TessSpacing.EqualSpacing,
+            bool earlyZ = _job["early_fragment_tests"] is JsonNode ez && (bool)ez;   // control +0x718 (dmsh_build.py job_for): [[early_fragment_tests]] in the MSL
+            return new GpuGraphicsState(earlyZ, _job["geometry_topology"] is JsonNode gt ? (InputTopology)(int)gt : InputTopology.Triangles, false, TessPatchType.Triangles, TessSpacing.EqualSpacing,
                 false, false, false, false /* depth not rewritten: dmsh_build.py adds the GL entry point (see the file header) */, false, 1f, AlphaTestOp.Always, 0f, attr, false, fout, false,
                 false /* no Y flip */, true /* origin upper-left */, false);
         }
@@ -161,7 +173,7 @@ static class SwshXlate
                 byte[] code = File.ReadAllBytes((string)job["code"]);
                 var acc = new Accessor(code, job);
                 // Job debug = false: turn off DebugMode (DebugMode skips the AST optimizer and the output is full of temporaries; semantics unchanged)
-                var flags = TranslationFlags.MetalImageAtomics | (job["debug"] is JsonNode dbg && !(bool)dbg ? 0 : TranslationFlags.DebugMode) | ((string)job["stage"] == "cs" ? TranslationFlags.Compute : 0);
+                var flags = TranslationFlags.MetalImageAtomics | (job["debug"] is JsonNode dbg && !(bool)dbg ? 0 : TranslationFlags.DebugMode) | ((string)job["stage"] == "cs" ? TranslationFlags.Compute : 0) | ((string)job["arch"] == "sm86" ? TranslationFlags.Ampere : 0);
                 var ctx = Translator.CreateContext(0, acc, new TranslationOptions(TargetLanguage.Spirv, TargetApi.Vulkan, flags));
                 bool geometry = job["geometry_topology"] != null;
                 ShaderProgram p = ctx.Translate(geometry);

@@ -87,6 +87,20 @@ class Copy(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform == 'darwin', 'uses macOS atomic bundle replacement')
+class CloneProbe(unittest.TestCase):
+    """can_clone with the real clonefile: a RomFS image is one file (os.walk of a file yields nothing), a folder is probed by its first file."""
+    def test_image_and_folder(self):
+        TEST_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as t:
+            t = Path(t)
+            for d in ('romfs/sub', 'empty', 'app'): (t / d).mkdir(parents=True)
+            (t / 'romfs.img').write_bytes(b'DMROMFS1'); (t / 'romfs/sub/file').write_bytes(b'file')
+            if not pack_app.can_clone(t / 'romfs', t / 'app'): self.skipTest(f'no APFS clones in {TEST_ROOT}')
+            self.assertTrue(pack_app.can_clone(t / 'romfs.img', t / 'app'))
+            self.assertFalse(pack_app.can_clone(t / 'empty', t / 'app'))
+            self.assertEqual(sorted(p.name for p in (t / 'app').iterdir()), [])   # no probe left behind
+
+
 class PackReuse(unittest.TestCase):
     """Call the real pack entry point; only external compiler, icon and signing tools are faked. No host is run."""
     def setUp(self):
@@ -103,7 +117,7 @@ class PackReuse(unittest.TestCase):
             'font/nintendo_ext.ttf': b'font', 'aoc/1/data': b'dlc', 'pso/gpu.mtl4a': b'archive',
             'pso/prebuilt.tsv': b'prebuilt', 'pso/rest_pairs.tsv': b'rest', 'pso/archive.tsv': b'index',
             'env.txt': b'DM_TEST=1', 'split.tsv': b'split', 'icon.jpg': b'jpeg', 'source/launcher.c': b'launcher',
-            'host/romfs_image.h': b'validator', 'tools/romfs.py': b'reader',
+            'host/romfs_image.h': b'validator', 'host/save_sync.c': b'sync', 'host/save_sync.h': b'sync api', 'tools/romfs.py': b'reader',
             'source/Launcher.swift': b'window', 'ios/Sources/LauncherSettings.swift': b'model', 'ios/Sources/LauncherRow.swift': b'rows',
         }
         for n in pack_app.TABLES: files['profile/' + n] = n.encode()
@@ -183,7 +197,8 @@ class PackReuse(unittest.TestCase):
         names = ['dmhost', 'patched/main.patched.bin', 'patched/main.fixups.tsv', 'patched/main.gates.tsv', 'patched/main.cuts.tsv',
                  'patched/main.obs.tsv', 'patched/nro.tsv', 'msl/k.metallib', 'msl/k.json', 'msl/inputs.tsv', 'font/nintendo_ext.ttf',
                  'pso/gpu.mtl4a', 'pso/prebuilt.tsv', 'pso/rest_pairs.tsv', 'pso/archive.tsv', 'env.txt', 'icon.jpg', 'source/launcher.c',
-                 'source/Launcher.swift', 'ios/Sources/LauncherSettings.swift', 'ios/Sources/LauncherRow.swift']   # the settings window's sources
+                 'source/Launcher.swift', 'ios/Sources/LauncherSettings.swift', 'ios/Sources/LauncherRow.swift',   # the settings window's sources
+                 'host/save_sync.c', 'host/save_sync.h']   # the cloud-save code the launcher links (its send after the host exits)
         names += ['profile/' + n for n in pack_app.TABLES]
         for name in names:
             with self.subTest(name=name):
@@ -241,6 +256,8 @@ class PackReuse(unittest.TestCase):
         self.assertIn('-c', c); self.assertIn('-parse-as-library', s)
         self.assertEqual(s[s.index('-o') + 1], str(Path(self.args.out).resolve().with_name('Game.app.partial') / 'Contents/MacOS/nxnative'))
         self.assertIn(c[c.index('-o') + 1], s)   # launcher.c's object, with its main
+        sync = next(c for c in self.commands if Path(c[0]).name == 'clang' and '-o' in c and c[-1].endswith('save_sync.c'))
+        self.assertIn(sync[sync.index('-o') + 1], s)   # save_sync.c's object: the launcher sends the save once the host has exited
         self.assertEqual([Path(x).name for x in s if x.endswith('.swift')], ['Launcher.swift', 'LauncherSettings.swift', 'LauncherRow.swift'])
 
     def test_selected_file_modes_and_file_additions_and_removals_invalidate(self):
@@ -354,7 +371,7 @@ class App(unittest.TestCase):
         (t / 'host.c').write_text(HOST_C)
         subprocess.run(['xcrun', 'clang', '-arch', 'arm64', '-o', t / 'dmhost', t / 'host.c'], check=True)
         for d in ('patched', 'romfs/region_common/audio', 'cache/b-0123456789ab', 'profile', 'font', 'aoc/1', 'bin', 'home'): (t / d).mkdir(parents=True)
-        for n, b in (('main.patched.bin', b'code'), ('main.fixups.tsv', b'f'), ('main.gates.tsv', b'g'), ('main.cuts.tsv', b'c'), ('main.obs.tsv', b'o'), ('main.sites.tsv', b's'), ('build_src.sha256', b'h')):
+        for n, b in (('main.patched.bin', b'code'), ('main.fixups.tsv', b'f'), ('main.gates.tsv', b'g'), ('main.cuts.tsv', b'c'), ('main.obs.tsv', b'o'), ('main.changed.tsv', b'w'), ('main.sites.tsv', b's'), ('build_src.sha256', b'h')):
             (t / 'patched' / n).write_bytes(b)
         (t / 'romfs/region_common/audio/edward.bfsar').write_bytes(b'snd')
         (t / 'cache/b-0123456789ab/k_b.metallib').write_bytes(b'lib'); (t / 'cache/b-0123456789ab/inputs.tsv').write_text('# stamp\n')
@@ -399,7 +416,7 @@ class App(unittest.TestCase):
         self.assertFalse(self.app.with_name(self.app.name + '.partial').exists())
         self.assertEqual(sorted(p.name for p in (c / 'MacOS').iterdir()), ['dmhost', 'nxnative'])
         self.assertEqual(sorted(p.name for p in (c / 'Resources/dm').iterdir()),
-                         ['c1_full.tsv', 'env.txt', 'font', 'launcher.json', 'main.cuts.tsv', 'main.fixups.tsv', 'main.gates.tsv', 'main.obs.tsv', 'main.patched.bin', 'pso_manifest.tsv', 'pso_pairs.tsv',
+                         ['c1_full.tsv', 'env.txt', 'font', 'launcher.json', 'main.changed.tsv', 'main.cuts.tsv', 'main.fixups.tsv', 'main.gates.tsv', 'main.obs.tsv', 'main.patched.bin', 'pso_manifest.tsv', 'pso_pairs.tsv',
                           'shader_map.tsv', 'shader_pairs.tsv'])   # the shader pairs: the pipeline prebuild's, without which hybrid draws have no stand-in
         self.assertEqual([p.name for p in (c / 'Resources/msl').iterdir()], ['b-0123456789ab'])   # the libraries only, not the compile cache
         self.assertEqual(sorted(p.name for p in (c / 'Resources/msl/b-0123456789ab').iterdir()), ['inputs.tsv', 'k_b.json', 'k_b.metallib'])
@@ -428,6 +445,8 @@ class App(unittest.TestCase):
         self.assertEqual((p['CFBundleExecutable'], p['CFBundleName'], p['CFBundleIdentifier'], p['CFBundleShortVersionString']), ('nxnative', 'Game: Test', 'org.nxnative.01008cf01baac000', '1.0.1'))
         self.assertEqual((p['DMTitleID'], p['DMLanguage'], p['DMRomfsMarker'], p['CFBundleIconFile']), (TID, 'fr', 'region_common/audio/edward.bfsar', 'AppIcon'))
         self.assertEqual(p['DMSettings'], [])   # launcher.json's settings, as the saved choices they accept: none here
+        self.assertRegex(p['DMCommit'], r'^[0-9a-f]{12}(\+dirty)?$')   # the packing checkout (scripts/bug_report.py, the host's start line)
+        self.assertEqual(p['DMChain'], '0123456789ab')   # the chain of the libraries packed (msl/b-<chain>)
 
     def test_packed_language_is_the_lists(self):   # --lang a game lacks: the Game language row's default (settings.py: the game's first), with or without the window
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as d:
@@ -612,6 +631,18 @@ class App(unittest.TestCase):
              mock.patch.object(shutil, 'disk_usage', lambda p: types.SimpleNamespace(free=(1 << 30) + msls + pso - 1)), contextlib.redirect_stdout(io.StringIO()) as o:
             with self.assertRaisesRegex(SystemExit, 'the app needs'): pack_app.pack(a)
         self.assertEqual(o.getvalue(), ''); self.assertFalse(Path(a.out).exists())
+
+    def test_each_source_probed(self):   # the RomFS on the app's volume, the rest on another: only the rest counts in the free-space check
+        a = types.SimpleNamespace(**vars(self.args)); a.out = str(self.tmp / 'Split.app')
+        romfs, probed, counted = (self.tmp / 'romfs').resolve(), [], []
+        def can_clone(src, dst): probed.append(src); return src == romfs
+        def tree_bytes(d): counted.append(d); return 0
+        lists = sum(p.stat().st_size for d, pats in (('patched', pack_app.MODULE_FILES), ('msl', pack_app.MSL_FILES), ('pso', pack_app.PSO_FILES))
+                    for pat in pats for p in (self.tmp / d).glob(pat) if p.is_file() and p.name != '_b_build.json')
+        with mock.patch.object(pack_app, 'can_clone', can_clone), mock.patch.object(pack_app, 'tree_bytes', tree_bytes), \
+             mock.patch.object(shutil, 'disk_usage', lambda p: types.SimpleNamespace(free=(1 << 30) + lists - 1)), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(SystemExit, 'the app needs'): pack_app.pack(a)
+        self.assertEqual(len(probed), 5); self.assertEqual(counted, [(self.tmp / 'aoc').resolve()])
 
     def test_copies(self):   # another volume (no APFS clone): plain copies, the same layout; a new app replaces the old one whole
         with mock.patch.object(pack_app, 'can_clone', lambda *a: False), mock.patch.object(pack_app, 'sign', lambda *a: None), mock.patch('sys.stdout'):

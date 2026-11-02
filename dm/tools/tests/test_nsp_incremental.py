@@ -122,6 +122,20 @@ class DeriveProfile(Base):
         nsp.derive_profile(g, self.pdir, 'v65536', self.ex, ['main'], shader_only=True)
         self.assertEqual(derived.table('shader_map.tsv').read_text(), 'generated DLC shader rows\n')
 
+    def test_derived_main_without_frame_step_stubs_keeps_the_games_step(self):
+        source = self.src / 'game.tsv'; source.write_text(source.read_text() + 'fps_target\t60\n')
+        (self.src / 'patches.py').write_text(f'def frame_step(ctx): pass\nFRAME_STEP = {{"{BID}": frame_step}}\n')   # stubs for the registered main only, never run
+        self.derive()
+        self.assertEqual(game.Game(self.pdir).get('fps_target'), '0')
+        self.assertIn('frame step stubs for other builds only', (self.pdir / 'game.tsv').read_text())
+        (self.src / 'patches.py').write_text(f'FRAME_STEP = {{"{BID}": 1, "{BID2}": 2}}\n')   # the derived main has stubs too
+        self.derive(); self.assertEqual(game.Game(self.pdir).get('fps_target'), '60')
+        (self.src / 'patches.py').write_text('CUTS = {}\n'); self.derive()   # no frame step in the profile
+        self.assertEqual(game.Game(self.pdir).get('fps_target'), '60')
+        (self.src / 'patches.py').write_text(f'FRAME_STEP = {{"{BID}": 1}}\n'); self.derive()
+        nsp.derive_profile(game.Game(self.src), self.pdir, 'v65536', self.ex, ['main'], shader_only=True)   # shader tables only: the settings stay
+        self.assertEqual(game.Game(self.pdir).get('fps_target'), '60')
+
     def test_missing_corrupt_and_duplicate_override_rows_derive_again(self):
         for change in ('missing', 'corrupt', 'override', 'indented override', 'truncated'):
             with self.subTest(change):
@@ -197,6 +211,45 @@ class DeriveProfile(Base):
             with self.assertRaisesRegex(OSError, 'interrupted replace'):
                 nsp.heap_check(REPO, self.ex, self.tmp / 'patched', self.tmp / 'work', {}, logs, g)
         self.assertEqual(g.table('game.tsv').read_bytes(), before)
+
+    def test_region_stamp_follows_the_rewrite(self):   # a derived build is checked once per rewrite: a new cut checks again, a reused derivation keeps the stamp
+        with (self.src / 'game.tsv').open('a') as f: f.write('mem_alias\t0x80000000\n')   # every profile has one (the host is built with it)
+        self.derive(); patched = self.tmp / 'work/patched_v65536'
+        logs = self.tmp / 'logs'; logs.mkdir()
+        def boot(*args): (logs / 'region_check.log').write_text('>>> nnMain\n'); (logs / 'regions.tsv').write_text('# table\n'); return 0
+        def check(key):
+            patched.with_name(patched.name + '.key').parent.mkdir(parents=True, exist_ok=True); patched.with_name(patched.name + '.key').write_text(key + '\n')
+            with mock.patch.object(nsp, 'build_mac_host'), mock.patch.object(nsp, 'boot_mac', side_effect=boot):
+                return nsp.region_check(REPO, self.ex, patched, self.tmp / 'work', {}, logs, game.Game(self.pdir))
+        g = check('a' * 64)
+        self.assertTrue(nsp.region_checked(g, patched))
+        self.derive(); self.assertTrue(nsp.region_checked(game.Game(self.pdir), patched))   # the derivation's inputs are unchanged: its stamp stays
+        patched.with_name(patched.name + '.key').write_text('b' * 64 + '\n')
+        self.assertFalse(nsp.region_checked(game.Game(self.pdir), patched))
+        g = check('b' * 64)
+        stamps = [l for l in g.table('game.tsv').read_text().splitlines() if l.startswith('# address regions: ')]
+        self.assertEqual(len(stamps), 1); self.assertTrue(stamps[0].endswith(f'(rewrite {"b" * 12})'))
+        self.assertNotIn('\n\n\n', g.table('game.tsv').read_text())
+
+    def test_region_check_sets_stdalloc_cap(self):   # set when the regions need it, worked out again by a later check, never over a value set by hand
+        with (self.src / 'game.tsv').open('a') as f: f.write('mem_alias\t0x118000000\n')
+        self.derive(); patched = self.tmp / 'work/patched_v65536'; key = patched.with_name(patched.name + '.key')
+        key.parent.mkdir(parents=True); key.write_text('a' * 64 + '\n')
+        logs = self.tmp / 'logs'; logs.mkdir()
+        def boot(*args): (logs / 'region_check.log').write_text('>>> nnMain\n'); (logs / 'regions.tsv').write_text('0x4000000\t0xa00000000\tmain+0x10\t0\t-\t-\t0\n'); return 0
+        def check(need):
+            with mock.patch.object(nsp, 'build_mac_host'), mock.patch.object(nsp, 'boot_mac', side_effect=boot), \
+                 mock.patch.object(nsp.pg, 'stdalloc_cap_needed', return_value=need) if not isinstance(need, Exception) else mock.patch.object(nsp.pg, 'stdalloc_cap_needed', side_effect=need):
+                return nsp.region_check(REPO, self.ex, patched, self.tmp / 'work', {}, logs, game.Game(self.pdir))
+        g = check(0xa4000000)
+        self.assertEqual(g.get('stdalloc_cap'), '0xa4000000'); self.assertTrue(nsp.checked_cap(g))
+        self.derive(); self.assertEqual(game.Game(self.pdir).get('stdalloc_cap'), '0xa4000000')   # a reused derivation keeps it
+        g = check(0xa2000000); self.assertEqual(g.get('stdalloc_cap'), '0xa2000000')
+        self.assertEqual(sum(l.startswith('stdalloc_cap\t') for l in g.table('game.tsv').read_text().splitlines()), 1)
+        g = check(None); self.assertFalse(g.values('stdalloc_cap'))   # no longer needed: the value it set goes
+        g = nsp.set_keys(g, {'stdalloc_cap': ('0xa0000000', 'by hand')}, 'Memory')
+        g = check(AssertionError('a value set by hand is checked, not worked out again'))
+        self.assertEqual(g.get('stdalloc_cap'), '0xa0000000')
 
     def test_rewrite_changes_update_auto_mem_used(self):
         self.derive(); g = game.Game(self.pdir); reg = game.Game(self.src)
@@ -567,6 +620,29 @@ class SplitShaders(Base):
         g = self.own(); g = nsp.set_keys(g, {'mem_used': ('0x4800000', '')}, 'After the rewrite'); k = self.go(g)
         g = self.own(); self.assertEqual(g.get('mem_used'), '0x4800000')
         self.assertEqual(self.go(g), k); self.assertEqual(self.splits, 1)
+
+
+class RewriteWorkers(Base):
+    def test_explicit_workers_override_the_automatic_module_budget(self):
+        g = game.Game(self.src)
+        for value, expected in (('1', '1'), ('3', '3'), ('', '14')):
+            with self.subTest(value=value):
+                out = self.tmp / f'patched-{value or "auto"}'
+                env = {'DM_GAME': str(self.src), 'DM_REWRITE_J': value}
+                with mock.patch.object(nsp, 'collect_nros', return_value={}), mock.patch.object(nsp, 'patch_files', return_value=[]), \
+                     mock.patch.object(nsp.os, 'cpu_count', return_value=14), mock.patch.object(nsp.time, 'sleep'), \
+                     mock.patch.object(nsp.subprocess, 'Popen', return_value=mock.Mock(returncode=0, poll=lambda: 0)) as popen:
+                    nsp.rewrite(Path(sys.executable), REPO, self.ex / 'ExeFS', out, env, self.tmp / 'logs', g)
+                self.assertEqual(popen.call_args.kwargs['env']['DM_REWRITE_J'], expected)
+                self.assertEqual(env['DM_REWRITE_J'], value)
+
+    def test_invalid_workers_fail_before_collecting_modules(self):
+        for value in ('0', '-1', 'many'):
+            with self.subTest(value=value), mock.patch.object(nsp, 'collect_nros') as collect:
+                with self.assertRaisesRegex(nsp.BuildError, 'DM_REWRITE_J must be a positive integer'):
+                    nsp.rewrite(Path(sys.executable), REPO, self.ex / 'ExeFS', self.tmp / 'patched',
+                                {'DM_REWRITE_J': value}, self.tmp / 'logs', game.Game(self.src))
+                collect.assert_not_called()
 
 
 class LayerShaders(Base):

@@ -137,7 +137,10 @@ int main(void) { @autoreleasepool {
     up_flush(); up_wait_zero(&g_up_pending);
     size_t idle = live_bytes(buffers);
     CHECK(peak <= (512u << 20), "streaming burst staging stays within 512 MiB");
-    CHECK(idle <= (96u << 20), "only three reusable staging blocks survive upload completion before the rendering fence");
+    // Demand reuse retains a primary and one bounded overflow block per slot.
+    // Everything beyond those six blocks must retire before the rendering fence.
+    CHECK(idle <= (up_reuse() ? (192u << 20) : (96u << 20)),
+          "completed uploads retain only the bounded slot staging cache");
     m4_end(encoder);
     uint64_t fence = mtl_sub_commit();
     CHECK(mtl_wait(fence, 5000000000ull), "rendering submission completes");

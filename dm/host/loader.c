@@ -132,7 +132,8 @@ int dm_main_imports(const char *prefix) {
     return 0;
 }
 
-// SDK major version, from the version string the SDK's libraries keep in the sdk module's read-only data ("NintendoSDK_nnSdk-10_4_0"; SDK 12 spells it NintendoSdk_).
+// SDK major version, from the version string the SDK's libraries keep in the sdk module's read-only data ("NintendoSDK_nnSdk-10_4_0"; SDK 12 spells it NintendoSdk_;
+// Switch 2 SDKs name a variant first: "NintendoSdk_nnSdk-Generic_20_5_19", Donkey Kong Bananza).
 // Behaviour that follows the SDK version is decided by it (the NVN API version, the shared-font layout), not by the game profile. 0 = no sdk module or no version string
 int dm_sdk_major(void) {
     static int major = -1;
@@ -140,12 +141,30 @@ int dm_sdk_major(void) {
     major = 0;
     for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "sdk")) {
         const char *b = (const char *)g_mod[i].base + g_mod[i].ro_off, *e = (const char *)g_mod[i].base + g_mod[i].key_page_off;   // read-only data, data and bss
-        for (const char *p = b; (p = memmem(p, (size_t)(e - p), "_nnSdk-", 7)); p += 7)
-            if (p - b >= 11 && !strncasecmp(p - 11, "NintendoSDK", 11) && p[7] >= '0' && p[7] <= '9') {
-                major = atoi(p + 7); LOG("sdk: NintendoSDK nnSdk-%.12s (major %d)", p + 7, major); break; }
+        for (const char *p = b; (p = memmem(p, (size_t)(e - p), "_nnSdk-", 7)); p += 7) {
+            if (p - b < 11 || strncasecmp(p - 11, "NintendoSDK", 11)) continue;
+            const char *v = p + 7;
+            while (v < e && ((*v >= 'A' && *v <= 'Z') || (*v >= 'a' && *v <= 'z'))) v++;   // a variant name ("Generic") and its '_'
+            if (v > p + 7 && v < e && *v == '_') v++;
+            if (v < e && *v >= '0' && *v <= '9') { major = atoi(v); LOG("sdk: NintendoSDK nnSdk-%.20s (major %d)", p + 7, major); break; }
+        }
     }
     if (!major) LOG("[RED] sdk: no SDK version string in the sdk module; SDK-dependent behaviour takes the newer SDKs' side");
     return major;
+}
+
+// Whether the sdk module was built for the Switch 2 ("Ounce"): its file system access log line names the build spec ("FS_ACCESS: { sdk_version: 20.5.19, spec: Ounce }";
+// Switch 1 SDKs say "spec: NX"). The Switch 2's NVN (NVN2) reports another API version (hle_nvn.c nvn_api)
+int dm_sdk_ounce(void) {
+    static int ounce = -1;
+    if (ounce >= 0) return ounce;
+    ounce = 0;
+    for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "sdk")) {
+        const char *b = (const char *)g_mod[i].base + g_mod[i].ro_off, *e = (const char *)g_mod[i].base + g_mod[i].key_page_off;
+        if (memmem(b, (size_t)(e - b), "spec: Ounce", 11)) ounce = 1;
+    }
+    if (ounce) LOG("sdk: built for the Switch 2 (spec: Ounce)");
+    return ounce;
 }
 
 // Cross-module symbol resolution: first look for a definition in the loaded modules, and only if not found hand over to HLE / stubs
@@ -195,18 +214,26 @@ static void read_layout(module_t *m, const char *dir) {
     FILE *f = fopen(path, "r");
     if (!f) die("open %s", path);
     static const char *kn[KEY_N] = {"K18", "KTLS", "KTLR", "KGATE"};
-    char line[256], key[32]; unsigned long v; unsigned seen = 0;
+    char line[256], key[48]; unsigned long v; unsigned seen = 0;
     while (fgets(line, sizeof line, f)) {
-        if (sscanf(line, "# %31s %lx", key, &v) != 2) die("%s: the output comes from an old rewriter; rewrite the modules again with dm/tools/patch_nso.py", path);
+        if (sscanf(line, "# %47s %lx", key, &v) != 2) die("%s: the output comes from an old rewriter; rewrite the modules again with dm/tools/patch_nso.py", path);
         if (!strcmp(key, "PATCH_OFF")) m->patch_off = strtoll(line + 2 + strlen(key), NULL, 16);   // may be negative (patch area before the base)
         else if (!strcmp(key, "IMAGE_SIZE")) m->image_size = v;
         else if (!strcmp(key, "FILE_IMAGE_LEN")) m->file_image_len = v;
+        else if (!strcmp(key, "BACK_OFF")) m->back_off = v;
+        else if (!strcmp(key, "BACK_LEN")) m->back_len = v;
         else if (!strcmp(key, "KEY_PAGE_OFF")) m->key_page_off = v;
         else if (!strcmp(key, "KEY_PAGE_SIZE")) m->key_page_size = v;
         else if (!strcmp(key, "TEXT_END")) m->text_end = v;
         else if (!strcmp(key, "RO_OFF")) m->ro_off = v;
         else if (!strcmp(key, "DATA_OFF")) m->data_off = v;
         else if (!strcmp(key, "FPS_STATE_OFF")) m->fps_state_off = v;
+        else if (!strcmp(key, "UE_MALLOC_VT")) m->ue_malloc_vt = v;
+        else if (!strcmp(key, "UE_MALLOC_SLOT")) m->ue_malloc_slot = (unsigned)v;
+        else if (!strncmp(key, "UE_CVAR:", 8)) {
+            if (m->n_ue_cvar == (int)(sizeof m->ue_cvar / sizeof *m->ue_cvar) || strlen(key + 8) >= sizeof m->ue_cvar[0].name) die("%s: too many Unreal console variables, or too long a name: %s", path, key);
+            strcpy(m->ue_cvar[m->n_ue_cvar].name, key + 8); m->ue_cvar[m->n_ue_cvar++].off = v;
+        }
         else if (!strcmp(key, "BUILD_ID")) sscanf(line, "# %*s %32s", m->build_id);
         else for (int k = 0; k < KEY_N; k++) {
             size_t n = strlen(kn[k]);
@@ -220,6 +247,9 @@ static void read_layout(module_t *m, const char *dir) {
         die("%s: the output comes from an old rewriter; rewrite the modules again with dm/tools/patch_nso.py", path);
     if (m->patch_off < 0 && (!m->image_size || !m->file_image_len || m->file_image_len % 0x4000 || m->patch_off % 0x4000 || m->key_page_off + m->key_page_size > m->image_size))
         die("%s: patch area before the base, but IMAGE_SIZE / FILE_IMAGE_LEN missing or wrong", path);
+    if ((m->back_off || m->back_len) && (m->patch_off >= 0 || !m->back_len || m->back_off % 0x4000 || m->back_len % 0x4000 || m->back_off < m->key_page_off + m->key_page_size
+                                         || m->back_off + m->back_len != m->image_size))
+        die("%s: back patch area, but BACK_OFF / BACK_LEN missing or wrong", path);
 }
 
 // Frame step state (the page after the key page, read-write; layout in patch_nso.py FRAME_STEP): the rewriter's stubs step the game by the host's whole vsyncs capped at this
@@ -564,12 +594,13 @@ static void map_image(module_t *m, const char *dir) {
     LOG("%s using static signed tvOS RX/RW/RX segments; no TEXT protection change", m->name);
     return;
 #else
+    if (!m->nro && m->patch_off >= 0) {
     char sw[17]; snprintf(sw, sizeof sw, "__DM%s%sW", ns, m->name);
     unsigned long zw; const uint8_t *w = getsectiondata(IMAGE_MH, sw, "__img", &zw);
     if (!w) die("embedded section %s missing", sw);
     uint64_t z0 = (m->text_end + 0x3FFF) & ~0x3FFFull;
 
-    if (m->patch_off >= 0) {
+    {
         char si[17]; snprintf(si, sizeof si, "__dm%s%simg", ns, m->name);
         unsigned long zi; const uint8_t *img = getsectiondata(IMAGE_MH, "__TEXT", si, &zi);
         if (!img) die("embedded section __TEXT,%s missing", si);
@@ -585,19 +616,35 @@ static void map_image(module_t *m, const char *dir) {
         return;
     }
 
-    // Negative PATCH_OFF builds retain the older three-piece representation.
-    char sx0[17], sx1[17]; snprintf(sx0, sizeof sx0, "__dm%s%sx0", ns, m->name); snprintf(sx1, sizeof sx1, "__dm%s%sx1", ns, m->name);
-    unsigned long zx0, zx1;
-    const uint8_t *x0 = getsectiondata(IMAGE_MH, "__TEXT", sx0, &zx0), *x1 = getsectiondata(IMAGE_MH, "__TEXT", sx1, &zx1);
-    if (!x0 || !x1 || zx0 + zw != m->file_image_len || (zx0 & 0x3FFF) || (zw & 0x3FFF) || (zx1 & 0x3FFF))
-        die("%s embedded front-patch section layout mismatch", m->name);
-    uint64_t pre = (uint64_t)-m->patch_off; m->size = m->image_size; m->patch_len = zx1;
+    }
+    char sx0[17], sx1[17], dm[17]; snprintf(sx0, sizeof sx0, "__dm%s%sx0", ns, m->name); snprintf(sx1, sizeof sx1, "__dm%s%sx1", ns, m->name); snprintf(dm, sizeof dm, "__DM%s%sW", ns, m->name);
+    unsigned long z0 = 0, zw = 0, z1 = 0;
+    const uint8_t *x0 = NULL, *w = NULL, *x1 = NULL;
+    if (m->nro) { if (!nro_pieces(m->name, &x0, &z0, &w, &zw, &x1, &z1)) die("NRO %s: not in the embedded NRO table (__DATA,__dm_nro_tab)", m->name); }
+    else { x0 = getsectiondata(IMAGE_MH, "__TEXT", sx0, &z0); w = getsectiondata(IMAGE_MH, dm, "__img", &zw); x1 = getsectiondata(IMAGE_MH, "__TEXT", sx1, &z1); }
+    if (!x0 || !w || !x1) die("embedded sections %s / %s / %s missing", sx0, dm, sx1);
+    // The back patch area (patch_nso.py TWO) is a fourth section, __dm<name>x2; NROs never have one (nro_pieces holds three pieces)
+    unsigned long z2 = 0; const uint8_t *x2 = NULL;
+    if (m->back_len) {
+        char sx2[17]; snprintf(sx2, sizeof sx2, "__dm%s%sx2", ns, m->name);
+        if (m->nro || !(x2 = getsectiondata(IMAGE_MH, "__TEXT", sx2, &z2)) || z2 != m->back_len || ((uintptr_t)x2 & 0x3FFF)) die("embedded back patch area %s missing or wrong", sx2);
+    }
+    // Patch area before the base (patch_off < 0): W ends at the end of data (FILE_IMAGE_LEN); bss and the key page are zero pages from vm_allocate and are not in the executable
+    int front = m->patch_off < 0;
+    if (z0 + zw != (front ? m->file_image_len : (uint64_t)m->patch_off) || (z0 & 0x3FFF) || (zw & 0x3FFF) || (z1 & 0x3FFF) || ((uintptr_t)x0 & 0x3FFF) || ((uintptr_t)w & 0x3FFF) || ((uintptr_t)x1 & 0x3FFF))
+        die("%s embedded section layout mismatch (x0 %#lx w %#lx x1 %#lx, PATCH_OFF %#llx)", m->name, z0, zw, z1, (unsigned long long)m->patch_off);
+    m->size = front ? m->image_size : m->patch_off + z1;
+    uint64_t pre = front ? (uint64_t)-m->patch_off : 0;
+    if (front) m->patch_len = z1;
     vm_address_t base = 0;
     if (vm_allocate(mach_task_self(), &base, pre + m->size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) die("%s failed to reserve address space", m->name);
     base += pre;
-    remap_at(m, base, x0, zx0, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
-    remap_at(m, base + zx0, w, zw, TRUE, VM_PROT_READ | VM_PROT_WRITE);
-    remap_at(m, base + m->patch_off, x1, zx1, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+    remap_at(m, base, x0, z0, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+    remap_at(m, base + z0, w, zw, TRUE, VM_PROT_READ | VM_PROT_WRITE);
+    // A module with nothing to rewrite has an empty patch area (87 of Super Smash Bros. Ultimate's 98 NROs: no x18, SVC or TLS register use); vm_remap refuses 0 bytes
+    // (KERN_INVALID_ARGUMENT), which stopped the app at launch on an iPhone at the first such NRO (found in PR #94)
+    if (z1) remap_at(m, base + m->patch_off, x1, z1, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+    if (z2) remap_at(m, base + m->back_off, x2, z2, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
     m->base = (uint8_t *)base; install_key_page(m);
 #endif
 }
@@ -618,14 +665,17 @@ static void map_image(module_t *m, const char *dir) {
     size_t sz; uint8_t *raw = slurp(path, &sz);
     if (m->patch_off < 0) {
         // Patch area before the base: file = the first part of the image (text + ro + data) + patch area; bss and the key page are anonymous zero pages. The gap from the patch area's end to the base is left inaccessible (PROT_NONE)
-        uint64_t pre = (uint64_t)-m->patch_off, fl = m->file_image_len;
-        if (sz < fl) die("%s is shorter than FILE_IMAGE_LEN %#llx", path, (unsigned long long)fl);
-        m->size = m->image_size; m->patch_len = (sz - fl + 0x3FFF) & ~0x3FFFull;
+        // With a back patch area (patch_nso.py TWO) the file ends with it, BACK_LEN bytes, copied to BACK_OFF in the image
+        uint64_t pre = (uint64_t)-m->patch_off, fl = m->file_image_len, bl = m->back_len;
+        if (sz < fl + bl) die("%s is shorter than FILE_IMAGE_LEN %#llx + BACK_LEN %#llx", path, (unsigned long long)fl, (unsigned long long)bl);
+        m->size = m->image_size; m->patch_len = (sz - bl - fl + 0x3FFF) & ~0x3FFFull;
         if (m->patch_len > pre) die("%s patch area of %#llx bytes does not fit in the %#llx before the base", path, (unsigned long long)m->patch_len, (unsigned long long)pre);
         uint8_t *a = mmap(NULL, pre + m->size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (a == MAP_FAILED) die("%s mmap %#llx", m->name, (unsigned long long)(pre + m->size));
         m->base = a + pre;
-        memcpy(m->base, raw, fl); memcpy(a, raw + fl, sz - fl); free(raw); install_key_page(m);
+        memcpy(m->base, raw, fl); memcpy(a, raw + fl, sz - bl - fl); if (bl) memcpy(m->base + m->back_off, raw + sz - bl, bl);
+        free(raw); install_key_page(m);
+        if (bl && mprotect(m->base + m->back_off, bl, PROT_READ | PROT_EXEC)) die("%s mprotect back patch", m->name);
         uint64_t rx = (m->text_end + 0x3FFF) & ~0x3FFFull;
         if (mprotect(m->base, rx, PROT_READ | PROT_EXEC)) die("%s mprotect text", m->name);
         if (mprotect(a, m->patch_len, PROT_READ | PROT_EXEC)) die("%s mprotect patch", m->name);
@@ -643,7 +693,11 @@ static void map_image(module_t *m, const char *dir) {
 }
 #endif
 
+static char g_module_dir[1024];   // the folder the modules were loaded from (dm_module_dir)
+const char *dm_module_dir(void) { return g_module_dir; }
+
 void load_modules(const char *dir, const char **names, int n) {
+    strlcpy(g_module_dir, dir, sizeof g_module_dir);
     // Map everything and parse the symbol tables first, then relocate all at once (cross-module symbols must all be in place first)
     // DM_BOOTPROF: breakdown of ① host loading (milliseconds), to set the upper bound for ③ pre-relocation / mmap
     uint64_t t0 = now_ns(), tm = 0, tp = 0, tg = 0, tr = 0, t;

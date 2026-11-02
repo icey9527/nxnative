@@ -17,7 +17,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / 'tools'))
 import romfs as rfs
-MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*.obs.tsv', 'nro.tsv')   # what the host reads from the module folder (build_ipa.sh copies the same tables)
+MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*.obs.tsv', '*.changed.tsv', 'nro.tsv')   # what the host reads from the module folder (build_ipa.sh copies the same tables but changed.tsv: the iPhone's cheats never write code)
 MSL_FILES = ('*.metallib', '*.json', '*.tsv')   # what the host reads from msl/ (not the Mac build's .metal sources or _b_build.json)
 # read beside DM_NVN_SHMAP; any of them may be absent (a Vulkan or GL game has no c1_full.tsv). The shader pairs are the pipeline prebuild's (nvn_mtl.m pso_prebuild): without them the
 # app makes no pulling bases, a hybrid draw has no stand-in and a new pipeline compiles on the submit thread (build_ipa.sh copies them into the IPA the same way)
@@ -42,8 +42,8 @@ def first_file(d):
     return None
 
 
-def can_clone(src, dst_dir):   # whether a file of src can be cloned into dst_dir (the same APFS volume)
-    f = first_file(src)
+def can_clone(src, dst_dir):   # whether src (a file such as a RomFS image, or a folder's first file) can be cloned into dst_dir (the same APFS volume)
+    f = src if src.is_file() else first_file(src)   # os.walk of a file yields nothing
     if f is None: return False
     t = dst_dir / '.clone_test'
     try:
@@ -84,12 +84,13 @@ def swift_sources():   # the settings window, with the iOS launcher's model and 
     return [HERE / 'Launcher.swift', HERE.parent / 'ios/Sources/LauncherSettings.swift', HERE.parent / 'ios/Sources/LauncherRow.swift']
 
 
-def build_launcher(out, minos, clang, swiftc, sdk):   # launcher.c's main, linked by swiftc with the settings window (no Swift main: -parse-as-library)
+def build_launcher(out, minos, clang, swiftc, sdk):   # launcher.c's main and the host's cloud-save code (its send after the host exits), linked by swiftc with the settings window (no Swift main: -parse-as-library)
     with tempfile.TemporaryDirectory(dir=out.parents[3]) as t:
-        obj = Path(t) / 'launcher.o'
-        run([clang, '-isysroot', sdk, '-arch', 'arm64', f'-mmacosx-version-min={minos}', '-O2', '-Wall', '-I', HERE.parent / 'host', '-c', '-o', obj, HERE / 'launcher.c'])
+        objs = [Path(t) / 'launcher.o', Path(t) / 'save_sync.o']
+        for obj, src in zip(objs, (HERE / 'launcher.c', HERE.parent / 'host/save_sync.c')):
+            run([clang, '-isysroot', sdk, '-arch', 'arm64', f'-mmacosx-version-min={minos}', '-O2', '-Wall', '-I', HERE.parent / 'host', '-c', '-o', obj, src])
         run([swiftc, '-sdk', sdk, '-target', f'arm64-apple-macos{minos}', '-O', '-swift-version', '5', '-parse-as-library', '-module-cache-path', Path(t) / 'module-cache',
-             '-o', out, *swift_sources(), obj, '-framework', 'CoreFoundation', '-framework', 'AppKit', '-framework', 'SwiftUI'])
+             '-o', out, *swift_sources(), *objs, '-framework', 'CoreFoundation', '-framework', 'AppKit', '-framework', 'SwiftUI'])
 
 
 def make_icns(jpg, out):   # the game's icon (256x256 JPEG) at every size an .icns holds
@@ -122,6 +123,15 @@ def info_plist(a, minos, icon):
         lang = next((s['default'] for s in listed if s['env'] == 'DM_LANG'), None)
         if lang: p['DMLanguage'] = lang   # the Game language row's default: --lang, or the game's first language when it lacks that one (settings.py), with or without the window
     return p
+
+
+def source_commit():   # DMCommit: the checkout that packed the app (scripts/bug_report.py reads it), short hash, +dirty with uncommitted changes to tracked files; None outside a checkout
+    repo = HERE.parent.parent
+    try:
+        head = subprocess.run(['git', '-C', repo, 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()
+        dirty = subprocess.run(['git', '-C', repo, 'status', '--porcelain', '--untracked-files=no'], capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError): return None
+    return head + ('+dirty' if dirty else '') if head else None
 
 
 def sign(app, identity, codesign):   # the inner host first, then the bundle (its resources and the launcher); no --options runtime (see the top)
@@ -212,7 +222,7 @@ def pack(a):
         if not codesign: raise SystemExit('codesign is not available')
         codesign = Path(codesign).resolve()
         minos = min_os(a.host)
-        sources = [Path(__file__).resolve(), HERE / 'launcher.c', HERE.parent / 'host/romfs_image.h', HERE.parent / 'tools/romfs.py'] + swift_sources()
+        sources = [Path(__file__).resolve(), HERE / 'launcher.c', HERE.parent / 'host/romfs_image.h', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_sync.h', HERE.parent / 'tools/romfs.py'] + swift_sources()
         inputs = {'options': vars(a), 'files': [(str(p), p.stat().st_mode, digest(p), os.readlink(p) if p.is_symlink() else None) for p in files + sources],
                   'trees': [(p, inventory(Path(p))) for p in (a.romfs, a.aoc) if p],
                   'tools': [[str(c), c.stat().st_mode, c.stat().st_size, c.stat().st_mtime_ns, c.stat().st_ctime_ns, run([c, '--version']).strip()] for c in (clang, swiftc)] + [
@@ -231,28 +241,33 @@ def pack(a):
     c = tmp / 'Contents'; mac, res = c / 'MacOS', c / 'Resources'; dm = res / 'dm'
     for d in (mac, dm / 'font'): d.mkdir(parents=True)
     romfs, msl, aoc = Path(a.romfs), Path(a.msl), Path(a.aoc) if a.aoc else None
-    clone = can_clone(romfs, res); pso_clone = bool(pso) and can_clone(Path(a.pso), res)
-    if not clone or (pso and not pso_clone):
-        need = (0 if clone else sum(tree_bytes(d) for d in [romfs] + ([aoc] if aoc else [])) + sum(p.stat().st_size for p in msls)) + (0 if pso_clone else sum(p.stat().st_size for p in pso))
+    # each source is probed on its own, as they may lie on different volumes; cp -c copies what it cannot clone, so a probe decides only the free-space check and the step line
+    trees, lists = {'romfs': romfs, 'aoc': aoc}, {'mods': mods, 'msl': msls, 'pso': pso}
+    clone = {k: bool(d) and can_clone(d, res) for k, d in trees.items()} | {k: bool(ps) and can_clone(ps[0], res) for k, ps in lists.items()}
+    need = sum(tree_bytes(d) for k, d in trees.items() if d and not clone[k]) + sum(p.stat().st_size for k, ps in lists.items() if not clone[k] for p in ps)
+    if need:
         free = shutil.disk_usage(res).free
         if need + (1 << 30) > free: raise SystemExit(f'the app needs {need / 2**30:.1f} GB on the volume of {out.parent} (no APFS clones from the build there) and {free / 2**30:.1f} GB are free')
-    step(f'launcher and host ({"clones" if clone else "copies"} of the game files)')
+    step(f'launcher and host ({"clones" if clone["romfs"] else "copies"} of the game files)')
     build_launcher(mac / EXE, minos, clang, swiftc, sdk)
     shutil.copy2(a.host, mac / 'dmhost')
-    copy(mods, dm, clone)
+    copy(mods, dm, clone['mods'])
     if tables: copy(tables, dm, False)
     if pairs: shutil.copyfile(pairs, dm / 'pso_pairs.tsv')   # the split's copy, for a profile without the table
     if fonts: copy(fonts, dm / 'font', False)
     if a.env_file: shutil.copyfile(a.env_file, dm / 'env.txt')
     if a.settings: shutil.copyfile(a.settings, dm / 'launcher.json')
-    step('shader libraries'); msl_dst = res / 'msl' / (a.msl_name or msl.name); msl_dst.mkdir(parents=True); copy(msls, msl_dst, clone)
-    if aoc: step('add-on content'); copy([aoc], res / 'aoc', clone)
-    if pso: step('pipeline archive'); (res / 'pso').mkdir(); copy(pso, res / 'pso', pso_clone)
-    step('game files'); copy([romfs], res / ('romfs.img' if romfs.is_file() else 'romfs'), clone)
+    step('shader libraries'); msl_dst = res / 'msl' / (a.msl_name or msl.name); msl_dst.mkdir(parents=True); copy(msls, msl_dst, clone['msl'])
+    if aoc: step('add-on content'); copy([aoc], res / 'aoc', clone['aoc'])
+    if pso: step('pipeline archive'); (res / 'pso').mkdir(); copy(pso, res / 'pso', clone['pso'])
+    step('game files'); copy([romfs], res / ('romfs.img' if romfs.is_file() else 'romfs'), clone['romfs'])
     icon = bool(a.icon)
     if icon: step('icon'); make_icns(a.icon, res / 'AppIcon.icns')
     info = info_plist(a, minos, icon)
     info['DMModuleFiles'] = [p.name for p in mods]
+    commit = source_commit()
+    if commit: info['DMCommit'] = commit
+    if msl_dst.name.startswith('b-'): info['DMChain'] = msl_dst.name[2:]   # the library chain the app carries (a Vulkan or GL game's vk / gl has none)
     (c / 'Info.plist').write_bytes(plistlib.dumps(info))
     (c / 'PkgInfo').write_text('APPL????')
     step(f'signing ({"ad-hoc" if a.sign == "-" else a.sign})'); sign(tmp, a.sign, codesign)
