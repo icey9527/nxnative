@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 static int memory_mprotect(void *addr, size_t size, int prot);
+static void *memory_mmap(void *addr, size_t size, int prot, int flags, int fd, off_t offset);
 static _Noreturn void memory_abort(void);
 static int memory_getpagesize(void) {
 #ifdef TEST_PAGE_16K
@@ -21,10 +22,12 @@ static int memory_getpagesize(void) {
 }
 #define getpagesize memory_getpagesize
 #define mprotect memory_mprotect
+#define mmap memory_mmap
 #define abort memory_abort
 #include "../hle_svc.c"
 #undef abort
 #undef mprotect
+#undef mmap
 #undef getpagesize
 
 static module_t test_modules[2];
@@ -78,7 +81,7 @@ void dm_guest_write_prepare(void *addr, size_t size) {
     }
 }
 
-static int fail_protect;
+static int fail_protect, fail_replace;
 static uint64_t *failure_regs, failure_input[3];
 static int64_t failure_mapped;
 static size_t failure_heap;
@@ -90,6 +93,12 @@ static int memory_mprotect(void *addr, size_t size, int prot) {
     atomic_fetch_add(&protects, 1);
     if (fail_protect) { errno = EACCES; return -1; }
     return mprotect(addr, size, prot);
+}
+// Replacement mappings are now the production decommit path. Inject their
+// failure as well as mprotect failure, without replacing the memory dispatcher.
+static void *memory_mmap(void *addr, size_t size, int prot, int flags, int fd, off_t offset) {
+    if ((flags & MAP_FIXED) && (fail_protect || fail_replace)) { errno = EACCES; return MAP_FAILED; }
+    return mmap(addr, size, prot, flags, fd, offset);
 }
 static _Noreturn void memory_abort(void) {
     // Only the production fatal path reaches this wrapper; assertion failures
@@ -138,6 +147,20 @@ static void fatal(unsigned svc, uint64_t x0, uint64_t x1, uint64_t x2) {
     }
     int status; assert(waitpid(pid, &status, 0) == pid);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 77);
+}
+
+static void release_fallback(void) {
+    size_t pg = memory_getpagesize();
+    uint64_t h = (alias - (uintptr_t)g_alias) / pg;
+    assert(!pages(1, alias, pg)); memset((void *)alias, 0x79, pg);
+    fail_replace = 1; assert(!pages(0, alias, pg)); fail_replace = 0;
+    // A refused replacement leaves old bytes inaccessible and marked exposed.
+    // The next map must clear them; successful replacement can clear exposure.
+    assert(g_alias_exposed[h >> 6] & (UINT64_C(1) << (h & 63)));
+    assert(!pages(1, alias, pg));
+    for (size_t i = 0; i < pg; i++) assert(!((uint8_t *)alias)[i]);
+    assert(!pages(0, alias, pg));
+    assert(!(g_alias_exposed[h >> 6] & (UINT64_C(1) << (h & 63))));
 }
 
 static void alias_lifecycle(void) {
@@ -490,7 +513,7 @@ int main(int argc, char **argv) {
     for (unsigned i = 0; i < 8; ++i) assert(!pthread_create(&threads[i], NULL, init_worker, &addresses[i]));
     for (unsigned i = 0; i < 8; ++i) { assert(!pthread_join(threads[i], NULL)); assert(addresses[i] == addresses[0]); }
     alias = addresses[0]; stack = info(I_StackAddr); heap = info(I_HeapAddr);
-    lazy_commit(); alias_lifecycle(); ownership(); module_sources(); module_back_patch(); failures(); concurrency(); fragmented_queries();
+    lazy_commit(); alias_lifecycle(); release_fallback(); ownership(); module_sources(); module_back_patch(); failures(); concurrency(); fragmented_queries();
     guest_helper();
     if (!DM_GAME_MEM_MAP_LIMIT) metadata_limit();
 #ifdef TEST_REAL_DIRTY
