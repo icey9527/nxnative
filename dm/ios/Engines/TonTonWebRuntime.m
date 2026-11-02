@@ -121,6 +121,7 @@ BOOL TonTonWebRuntimeAvailable(NSString *title, NSString *slot) {
 @property(strong) TTLocalRuntimeServer *server;
 @property(strong) WKWebView *web;
 @property(strong) NSFileHandle *log;
+@property(strong) UILabel *failureLabel;
 @end
 @implementation TTWebRuntimeController
 - (void)dealloc {
@@ -163,7 +164,10 @@ BOOL TonTonWebRuntimeAvailable(NSString *title, NSString *slot) {
     [self.view addSubview:self.web];
     NSURLComponents *url=[NSURLComponents componentsWithString:[NSString stringWithFormat:@"http://127.0.0.1:%u/boxedwine.html",self.server.port]];
     NSMutableArray *query=[NSMutableArray new];
-    NSDictionary *options=@{@"root":@"boxedwine",@"app":@"ra2-ea-full",@"p":@"gamemd.exe",@"resolution":@"1024x768",@"bpp":@"16",@"auto":@"true",@"env":@"WINEDLLOVERRIDES:ddraw=n,b;dsound,wsock32,wined3d=b"};
+    // The owned ZIP is mounted as C:\\files. Register its COM server in Wine's
+    // normal persistent prefix before starting; a successful ZIP import alone
+    // does not install this dependency. Stop if registration fails.
+    NSDictionary *options=@{@"root":@"boxedwine",@"app":@"ra2-ea-full",@"p":@"cmd.exe",@"args":@"/c regsvr32.exe /s Blowfish.dll && gamemd.exe",@"app-range":@"true",@"resolution":@"1024x768",@"bpp":@"16",@"auto":@"true",@"env":@"WINEDLLOVERRIDES:ddraw=n,b;dsound,wsock32,wined3d=b"};
     for(NSString *key in options)[query addObject:[NSURLQueryItem queryItemWithName:key value:options[key]]];
     url.queryItems=query;[self writeLog:@"Starting bundled BoxedWine with owned full EA resources; runtime compatibility remains experimental."];
     [self.web loadRequest:[NSURLRequest requestWithURL:url.URL]];
@@ -171,9 +175,27 @@ BOOL TonTonWebRuntimeAvailable(NSString *title, NSString *slot) {
 - (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message {
     if([message.body isKindOfClass:NSDictionary.class])[self writeLog:[NSString stringWithFormat:@"%@: %@",message.body[@"kind"],message.body[@"text"]]];
 }
-- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView { [self writeLog:@"WebKit content process terminated; inspect memory/crash report. No automatic reload."]; }
-- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error { [self writeLog:error.description]; }
-- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error { [self writeLog:error.description]; }
+- (void)showRuntimeFailure {
+    // Keep the persistent Wine store and the diagnostic report. A terminated
+    // content process must not leave an unexplained blank view or reload loop.
+    [self.web stopLoading];self.web.hidden=YES;
+    if(self.failureLabel)return;
+    UILabel *label=[UILabel new];label.frame=CGRectInset(self.view.bounds,32,32);
+    label.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    label.numberOfLines=0;label.textAlignment=NSTextAlignmentCenter;label.textColor=UIColor.labelColor;
+    label.text=@"运行层已停止，日志已保留。\n请关闭并重新打开游戏匣。";
+    self.failureLabel=label;[self.view addSubview:label];
+}
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+    [self writeLog:@"WebKit content process terminated; inspect memory/crash report. No automatic reload."];
+    [self showRuntimeFailure];
+}
+- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self writeLog:error.description];if(error.code!=NSURLErrorCancelled)[self showRuntimeFailure];
+}
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self writeLog:error.description];if(error.code!=NSURLErrorCancelled)[self showRuntimeFailure];
+}
 @end
 UIViewController *TonTonWebRuntimeController(NSString *title,NSString *slot) {
     if(!TonTonWebRuntimeAvailable(title,slot))return nil;

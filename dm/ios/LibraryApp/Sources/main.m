@@ -7,6 +7,7 @@
 #import "GameOpen.h"
 #import "LibraryRoot.h"
 #import "ResourceImport.h"
+#import "StorageStatus.h"
 #ifdef DM_LIBRARY_HOST
 #include "game_profile_runtime.h"
 #include "dmsh_chain.h"
@@ -312,6 +313,7 @@ UILayoutGuide *safe=self.view.safeAreaLayoutGuide;
 }
 @end
 UIViewController *TonTonLibraryController(void (^startGame)(NSString *titleID)){
+    TonTonWriteStorageStatus();
     LibraryView *view=[LibraryView new];view.startGame=startGame;return view;
 }
 #ifndef DM_LIBRARY_HOST

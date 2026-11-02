@@ -68,7 +68,15 @@ static NSDictionary *TTImportOne(NSString *documents,NSString *inbox,NSDictionar
     NSString *slot=[games stringByAppendingPathComponent:title];TTImportDirectory(slot);
     NSString *resources=[slot stringByAppendingPathComponent:@"Resources"];TTImportDirectory(resources);
     NSString *destination=[resources stringByAppendingPathComponent:name];
-    if([fm attributesOfItemAtPath:destination error:nil]){
+    NSDictionary *existing=[fm attributesOfItemAtPath:destination error:nil];
+    // A failed device copy can leave an empty RomFS placeholder. Replacing it
+    // requires an explicit data-only task; nonempty files and links stay intact.
+    BOOL replaceEmpty=existing && [name isEqual:@"romfs.img"] &&
+        [manifest[@"replace_empty_placeholder"] isEqual:@YES] &&
+        [existing[NSFileType] isEqual:NSFileTypeRegular] &&
+        [existing[NSFileSize] unsignedLongLongValue]==0;
+    NSString *retainedEmpty=nil;
+    if(existing && !replaceEmpty){
         TTImportRequire([[fm attributesOfItemAtPath:destination error:nil][NSFileSize] unsignedLongLongValue]==total&&
                         [TTImportHashFile(destination) isEqual:sha],@"已有资源与导入清单不同，已保留原文件。");
     }else{
@@ -101,7 +109,23 @@ static NSDictionary *TTImportOne(NSString *documents,NSString *inbox,NSDictionar
             TTImportRequire([TTImportDigest(&whole) isEqual:sha],@"完整资源校验失败。");
             TTImportRequire(fsync(output)==0,@"资源写入尚未完成。");
             NSError *error=nil;
-            TTImportRequire([fm moveItemAtPath:temporary toPath:destination error:&error],error.localizedDescription);
+            if(replaceEmpty){
+                NSDictionary *now=[fm attributesOfItemAtPath:destination error:nil];
+                TTImportRequire([now[NSFileType] isEqual:NSFileTypeRegular] &&
+                    [now[NSFileSize] unsignedLongLongValue]==0 &&
+                    [now[NSFileSystemNumber] isEqual:existing[NSFileSystemNumber]] &&
+                    [now[NSFileSystemFileNumber] isEqual:existing[NSFileSystemFileNumber]],
+                    @"空资源已改变，未替换原文件。");
+                retainedEmpty=[resources stringByAppendingPathComponent:
+                    [@"romfs.img.empty-before-import-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+                TTImportRequire([fm moveItemAtPath:destination toPath:retainedEmpty error:&error],error.localizedDescription);
+            }
+            if(![fm moveItemAtPath:temporary toPath:destination error:&error]){
+                NSString *reason=error.localizedDescription;
+                if(retainedEmpty && ![fm attributesOfItemAtPath:destination error:nil])
+                    [fm moveItemAtPath:retainedEmpty toPath:destination error:nil];
+                TTImportRequire(NO,reason);
+            }
             complete=YES;
         }@finally{
             close(output);
@@ -121,7 +145,40 @@ static NSDictionary *TTImportOne(NSString *documents,NSString *inbox,NSDictionar
     }
     NSDictionary *attributes=[fm attributesOfItemAtPath:destination error:nil];
     return @{@"status":@"imported",@"resource":name,@"game_id":title,@"bytes":@(total),@"sha256":sha,
+             @"retained_empty_placeholder":retainedEmpty.lastPathComponent?:@"",
              @"mtime":@([attributes[NSFileModificationDate] timeIntervalSince1970])};
+}
+// Delivery services may read a destination but be unable to create its task
+// file. Ship data-only task metadata with the signed app instead; the app
+// creates it using its own sandbox rights, without changing system permissions.
+static NSArray *TonTonSeedResourceImportTasks(NSString *documents,id tasks) {
+    NSMutableArray *results=[NSMutableArray new];NSFileManager *fm=NSFileManager.defaultManager;
+    NSString *root=[documents stringByAppendingPathComponent:@"TonTonIncoming"];
+    if(![[fm attributesOfItemAtPath:root error:nil][NSFileType] isEqual:NSFileTypeDirectory])return results;
+    if(![tasks isKindOfClass:NSArray.class]||[tasks count]>1024)return @[@{@"status":@"failed",@"reason":@"内置导入任务格式无效。"}];
+    for(id task in tasks){
+        NSString *temporary=nil;BOOL temporaryOwned=NO;
+        @try{
+            TTImportRequire([task isKindOfClass:NSDictionary.class],@"内置导入任务无效。");
+            NSString *name=task[@"inbox"];
+            TTImportRequire(TTImportMatch(name,@"^[a-z0-9][a-z0-9_-]{0,95}$"),@"内置导入目录无效。");
+            NSString *folder=[root stringByAppendingPathComponent:name];
+            NSDictionary *attributes=[fm attributesOfItemAtPath:folder error:nil];
+            if(!attributes)continue; // A transfer for another device is absent.
+            TTImportRequire([attributes[NSFileType] isEqual:NSFileTypeDirectory],@"内置导入目录包含链接。");
+            NSString *path=[folder stringByAppendingPathComponent:@"ImportTask.json"];
+            if([fm attributesOfItemAtPath:path error:nil])continue; // Never replace an existing task.
+            TTImportRequire([task[@"manifest"] isKindOfClass:NSDictionary.class],@"缺少内置导入清单。");
+            NSError *error=nil;
+            NSData *data=[NSJSONSerialization dataWithJSONObject:task[@"manifest"] options:0 error:&error];
+            TTImportRequire(data&&data.length<(8<<20),@"内置导入清单无效或过大。");
+            temporary=[folder stringByAppendingPathComponent:[@".task-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+            TTImportRequire([data writeToFile:temporary options:NSDataWritingWithoutOverwriting error:&error],error.localizedDescription);
+            temporaryOwned=YES;
+            TTImportRequire([fm moveItemAtPath:temporary toPath:path error:&error],error.localizedDescription);
+        }@catch(NSException *error){[results addObject:@{@"status":@"failed",@"reason":error.reason?:@"导入清单创建失败"}];}
+        @finally{if(temporaryOwned)[fm removeItemAtPath:temporary error:nil];}
+    }return results;
 }
 static NSArray *TonTonImportPendingResources(NSString *documents) {
     static NSObject *guard;static dispatch_once_t once;dispatch_once(&once,^{guard=[NSObject new];});
@@ -129,6 +186,11 @@ static NSArray *TonTonImportPendingResources(NSString *documents) {
         NSMutableArray *results=[NSMutableArray new];NSFileManager *fm=NSFileManager.defaultManager;
         NSString *root=[documents stringByAppendingPathComponent:@"TonTonIncoming"];
         if(![[fm attributesOfItemAtPath:root error:nil][NSFileType] isEqual:NSFileTypeDirectory])return results;
+        NSString *bundled=[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"Runtimes/ResourceImports.json"];
+        if(TTImportRegular(bundled)&&[[fm attributesOfItemAtPath:bundled error:nil][NSFileSize] unsignedLongLongValue]<(8<<20)){
+            id tasks=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:bundled] options:0 error:nil];
+            [results addObjectsFromArray:TonTonSeedResourceImportTasks(documents,tasks)];
+        }
         for(NSString *entry in [fm contentsOfDirectoryAtPath:root error:nil]){
             NSString *folder=[root stringByAppendingPathComponent:entry];
             if(![[fm attributesOfItemAtPath:folder error:nil][NSFileType] isEqual:NSFileTypeDirectory])continue;

@@ -18,7 +18,11 @@ class ResourceImport(unittest.TestCase):
             harness = root / 'test.m'
             harness.write_text('''#import "ResourceImport.h"
 int main(int argc,char **argv){@autoreleasepool{
-    NSArray *r=TonTonImportPendingResources([NSString stringWithUTF8String:argv[1]]);
+    NSString *documents=[NSString stringWithUTF8String:argv[1]];
+    NSMutableArray *r=[NSMutableArray new];
+    if(argc>2){id tasks=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:[NSString stringWithUTF8String:argv[2]]] options:0 error:nil];
+        [r addObjectsFromArray:TonTonSeedResourceImportTasks(documents,tasks)];}
+    [r addObjectsFromArray:TonTonImportPendingResources(documents)];
     NSData *json=[NSJSONSerialization dataWithJSONObject:r options:0 error:nil];
     fwrite(json.bytes,1,json.length,stdout);
 }}''')
@@ -91,6 +95,78 @@ int main(int argc,char **argv){@autoreleasepool{
             docs, _, _, result = run('existing', existing)
             self.assertEqual(result[0]['status'], 'failed')
             self.assertEqual((docs / 'Games/sample/Resources/game.zip').read_bytes(), b'keep original resource')
+
+            def empty_romfs(d, i, m):
+                m.update(resource_name='romfs.img', replace_empty_placeholder=True)
+                path = d / 'Games/sample/Resources/romfs.img'
+                path.parent.mkdir()
+                path.touch()
+            docs, _, content, result = run('empty-romfs-explicit', empty_romfs)
+            self.assertEqual(result[0]['status'], 'imported')
+            self.assertEqual((docs / 'Games/sample/Resources/romfs.img').read_bytes(), content)
+            retained = docs / 'Games/sample/Resources' / result[0]['retained_empty_placeholder']
+            self.assertTrue(retained.is_file())
+            self.assertEqual(retained.read_bytes(), b'')
+
+            def empty_without_opt_in(d, i, m):
+                empty_romfs(d, i, m)
+                m.pop('replace_empty_placeholder')
+            docs, _, _, result = run('empty-romfs-default', empty_without_opt_in)
+            self.assertEqual(result[0]['status'], 'failed')
+            self.assertEqual((docs / 'Games/sample/Resources/romfs.img').read_bytes(), b'')
+
+            def corrupt_empty(d, i, m):
+                empty_romfs(d, i, m)
+                corrupt(d, i, m)
+            docs, _, _, result = run('corrupt-empty-romfs', corrupt_empty)
+            self.assertEqual(result[0]['status'], 'failed')
+            self.assertEqual((docs / 'Games/sample/Resources/romfs.img').read_bytes(), b'')
+            self.assertEqual(list((docs / 'Games/sample/Resources').glob('*.empty-before-import-*')), [])
+
+            def nonempty_opt_in(d, i, m):
+                empty_romfs(d, i, m)
+                (d / 'Games/sample/Resources/romfs.img').write_bytes(b'original game')
+            docs, _, _, result = run('nonempty-romfs-opt-in', nonempty_opt_in)
+            self.assertEqual(result[0]['status'], 'failed')
+            self.assertEqual((docs / 'Games/sample/Resources/romfs.img').read_bytes(), b'original game')
+
+            def linked_empty(d, i, m):
+                empty_romfs(d, i, m)
+                path = d / 'Games/sample/Resources/romfs.img'
+                outside = root / 'empty-outside'
+                outside.touch()
+                path.unlink()
+                path.symlink_to(outside)
+            docs, _, _, result = run('linked-empty-romfs', linked_empty)
+            self.assertEqual(result[0]['status'], 'failed')
+            self.assertTrue((docs / 'Games/sample/Resources/romfs.img').is_symlink())
+
+            # Metadata delivered in the app bundle needs no external write into
+            # another app's sandbox. Only existing transfer directories qualify.
+            docs, inbox, content, _ = run('seed-task')
+            manifest = json.loads((inbox / 'ImportTask.json').read_text())
+            (inbox / 'ImportTask.json').unlink()
+            (inbox / 'ImportResult.json').unlink()
+            seed = root / 'bundled-tasks.json'
+            seed.write_text(json.dumps([dict(inbox='test', manifest=manifest)]))
+            result = json.loads(subprocess.check_output([str(root / 'test'), str(docs), str(seed)]))
+            self.assertEqual(result[0]['status'], 'imported')
+            self.assertEqual((docs / 'Games/sample/Resources/game.zip').read_bytes(), content)
+            original = (inbox / 'ImportTask.json').read_bytes()
+            seed.write_text(json.dumps([dict(inbox='test', manifest={'schema': 'invalid'})]))
+            self.assertEqual(json.loads(subprocess.check_output([str(root / 'test'), str(docs), str(seed)])), [])
+            self.assertEqual((inbox / 'ImportTask.json').read_bytes(), original)
+            for name in ['../escape', '/outside', 'test/child']:
+                seed.write_text(json.dumps([dict(inbox=name, manifest=manifest)]))
+                result = json.loads(subprocess.check_output([str(root / 'test'), str(docs), str(seed)]))
+                self.assertEqual(result[0]['status'], 'failed')
+            (docs / 'TonTonIncoming/link').symlink_to(inbox, target_is_directory=True)
+            seed.write_text(json.dumps([dict(inbox='link', manifest=manifest)]))
+            result = json.loads(subprocess.check_output([str(root / 'test'), str(docs), str(seed)]))
+            self.assertEqual(result[0]['status'], 'failed')
+            seed.write_text(json.dumps([dict(inbox='missing', manifest=manifest)]))
+            self.assertEqual(json.loads(subprocess.check_output([str(root / 'test'), str(docs), str(seed)])), [])
+            self.assertFalse((docs / 'TonTonIncoming/missing').exists())
 
 
 if __name__ == '__main__': unittest.main()
