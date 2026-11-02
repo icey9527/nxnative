@@ -21,6 +21,58 @@ bool dm_show_launcher(void *view_controller, void (*done)(void)) {
 #endif
 static UIColor *C(int r,int g,int b){return [UIColor colorWithRed:r/255.0 green:g/255.0 blue:b/255.0 alpha:1];}
 static UIColor *D(int lr,int lg,int lb,int dr,int dg,int db){return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *t){return t.userInterfaceStyle==UIUserInterfaceStyleDark?C(dr,dg,db):C(lr,lg,lb);}];}
+// These are preferences for the library, not a second copy of each game's
+// launcher.json. Apply a choice only if the selected game's schema offers it.
+static NSArray<NSDictionary *> *libraryPreferences(void){
+    return @[
+        @{@"key":@"DM_FRAME_LIMIT",@"title":@"帧率限制",@"default":@"unlimited",@"choices":@[@[@"unlimited",@"不限制"],@[@"game",@"游戏原始设置"]]},
+        @{@"key":@"DM_LANG",@"title":@"游戏语言",@"choices":@[@[@"auto",@"游戏默认"],@[@"chinese",@"优先中文"],@[@"english",@"英语"]]},
+        @{@"key":@"DM_OPMODE",@"title":@"运行模式",@"choices":@[@[@"auto",@"游戏默认"],@[@"0",@"掌机"],@[@"1",@"底座"]]},
+        @{@"key":@"DM_PRESENT_UPSCALE",@"title":@"画面超分",@"choices":@[@[@"auto",@"游戏默认"],@[@"off",@"关闭"],@[@"metalfx",@"MetalFX"]]},
+        @{@"key":@"DM_FRAMEGEN",@"title":@"画面插帧",@"choices":@[@[@"auto",@"游戏默认"],@[@"off",@"关闭"],@[@"opticalflow",@"实验性光流"]]},
+        @{@"key":@"DM_SHOW_FPS",@"title":@"显示帧率",@"choices":@[@[@"auto",@"游戏默认"],@[@"0",@"隐藏"],@[@"1",@"显示"]]}
+    ];
+}
+static NSString *libraryPreferenceKey(NSString *key){return [@"tonton.global." stringByAppendingString:key];}
+static NSDictionary *librarySetting(NSString *titleID, NSString *key){
+    NSString *doc=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+    NSString *relative=[NSString stringWithFormat:@"Games/%@/Resources/dm/launcher.json",titleID.lowercaseString];
+    NSString *path=[doc stringByAppendingPathComponent:relative];
+    if(![NSFileManager.defaultManager fileExistsAtPath:path])
+        path=[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:[NSString stringWithFormat:@"GameResources/%@/Resources/dm/launcher.json",titleID.lowercaseString]];
+    NSData *data=[NSData dataWithContentsOfFile:path];
+    NSDictionary *json=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+    for(NSDictionary *item in [json[@"settings"] isKindOfClass:NSArray.class]?json[@"settings"]:@[])
+        if([item[@"env"] isEqual:key])return item;
+    return nil;
+}
+void TonTonApplyGlobalSettings(NSString *titleID){
+    NSUserDefaults *defaults=NSUserDefaults.standardUserDefaults;
+    for(NSDictionary *spec in libraryPreferences()){
+        NSString *key=spec[@"key"],*choice=[defaults stringForKey:libraryPreferenceKey(key)];
+        if(!choice.length)choice=spec[@"default"];
+        if(!choice.length||[choice isEqual:@"auto"])continue;
+        if([key isEqual:@"DM_FRAME_LIMIT"]){
+            if([choice isEqual:@"unlimited"]||[choice isEqual:@"game"])setenv(key.UTF8String,choice.UTF8String,1);
+            continue;
+        }
+        NSDictionary *setting=librarySetting(titleID,key);
+        if(!setting)continue;
+        NSArray *options=[setting[@"options"] isKindOfClass:NSArray.class]?setting[@"options"]:@[];
+        NSMutableSet<NSString *> *allowed=[NSMutableSet set];
+        for(NSArray *option in options)if([option isKindOfClass:NSArray.class]&&option.count&&[option[0] isKindOfClass:NSString.class])[allowed addObject:option[0]];
+        NSString *value=choice;
+        if([key isEqual:@"DM_LANG"]){
+            NSArray *preferred=[choice isEqual:@"chinese"]?@[@"zh-Hans",@"zh-Hant",@"zh-CN",@"zh-TW"]:@[@"en-US",@"en-GB"];
+            value=nil;
+            for(NSString *candidate in preferred)if([allowed containsObject:candidate]){value=candidate;break;}
+        }
+        BOOL valid=value.length&&([setting[@"kind"] isEqual:@"toggle"]?
+            ([value isEqual:(setting[@"on"]?:@"1")]||[value isEqual:(setting[@"off"]?:@"0")]):
+            [allowed containsObject:value]);
+        if(valid){setenv(key.UTF8String,value.UTF8String,1);NSLog(@"TonTon global %@=%@ for %@",key,value,titleID);}
+    }
+}
 static void excludeGameResourcesFromBackup(void){
     NSString *doc=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     NSString *root=[doc stringByAppendingPathComponent:@"Games"];
@@ -98,6 +150,8 @@ static UIImage *coverForGame(NSDictionary *g){
     NSString *title=g[@"id"];
     UIImage *bundled=[UIImage imageNamed:title];
     if(bundled)return bundled;
+    NSString *local=[NSBundle.mainBundle pathForResource:title ofType:@"png"];
+    if(local){UIImage *image=[UIImage imageWithContentsOfFile:local];if(image)return image;}
     NSString *doc=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     NSString *slot=[[doc stringByAppendingPathComponent:@"Games"] stringByAppendingPathComponent:title];
     NSString *inside=[[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"GameResources"] stringByAppendingPathComponent:title];
@@ -174,7 +228,7 @@ _bandText.translatesAutoresizingMaskIntoConstraints=NO;[_labelBand addSubview:_b
 [_title.topAnchor constraintEqualToAnchor:_caseView.bottomAnchor constant:9],[_title.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:3],[_title.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
 [_sizeLabel.topAnchor constraintEqualToAnchor:_title.bottomAnchor constant:3],[_sizeLabel.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor],[_sizeLabel.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
 [_badge.bottomAnchor constraintEqualToAnchor:_coverFrame.bottomAnchor constant:-8],[_badge.trailingAnchor constraintEqualToAnchor:_coverFrame.trailingAnchor constant:-8],[_badge.widthAnchor constraintEqualToConstant:34],[_badge.heightAnchor constraintEqualToConstant:34]]];return self;}
-- (void)layoutSubviews{[super layoutSubviews];CGRect b=_caseView.bounds;if(CGRectIsEmpty(b))return;
+- (void)layoutSubviews{[super layoutSubviews];[self.contentView layoutIfNeeded];CGRect b=_caseView.bounds;if(CGRectIsEmpty(b))return;
 CGFloat w=b.size.width,h=b.size.height;
 UIBezierPath *p=[UIBezierPath bezierPath];[p moveToPoint:CGPointMake(12,0)];
 [p addLineToPoint:CGPointMake(w-26,0)];[p addLineToPoint:CGPointMake(w-26,7)];[p addLineToPoint:CGPointMake(w-8,7)];
@@ -183,6 +237,49 @@ UIBezierPath *p=[UIBezierPath bezierPath];[p moveToPoint:CGPointMake(12,0)];
 [p addQuadCurveToPoint:CGPointMake(0,h-13) controlPoint:CGPointMake(0,h)];[p addLineToPoint:CGPointMake(0,12)];
 [p addQuadCurveToPoint:CGPointMake(12,0) controlPoint:CGPointMake(0,0)];[p closePath];
 _shellMask.frame=b;_shellMask.path=p.CGPath;_shellEdge.frame=b;_shellEdge.path=p.CGPath;}
+@end
+@interface LibrarySettingsView:UITableViewController
+@end
+@implementation LibrarySettingsView
+- (instancetype)init{self=[super initWithStyle:UITableViewStyleInsetGrouped];if(self)self.title=@"全局设置";return self;}
+- (void)viewDidLoad{
+    [super viewDidLoad];
+    self.tableView.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc]initWithTitle:@"完成" style:UIBarButtonItemStyleDone target:self action:@selector(close)];
+    self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc]initWithTitle:@"重置" style:UIBarButtonItemStylePlain target:self action:@selector(resetChoices)];
+}
+- (void)close{[self dismissViewControllerAnimated:YES completion:nil];}
+- (void)resetChoices{for(NSDictionary *spec in libraryPreferences())[NSUserDefaults.standardUserDefaults removeObjectForKey:libraryPreferenceKey(spec[@"key"])];[self.tableView reloadData];}
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView{(void)tableView;return 1;}
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{(void)tableView;(void)section;return libraryPreferences().count;}
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section{
+    (void)tableView;(void)section;return @"这些设置会在下次打开游戏时生效。游戏不支持的选项会保持该游戏原来的设置；游戏语言优先使用游戏自带的中文。不限制会取消宿主限帧；游戏内置限帧与固定步长仍需逐款适配，实际帧率取决于设备性能。";
+}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath{
+    UITableViewCell *cell=[tableView dequeueReusableCellWithIdentifier:@"choice"];
+    if(!cell)cell=[[UITableViewCell alloc]initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:@"choice"];
+    NSDictionary *spec=libraryPreferences()[indexPath.row];
+    NSString *selected=[NSUserDefaults.standardUserDefaults stringForKey:libraryPreferenceKey(spec[@"key"])]?:(spec[@"default"]?:@"auto");
+    NSString *label=@"游戏默认";
+    for(NSArray *choice in spec[@"choices"])if([choice[0] isEqual:selected]){label=choice[1];break;}
+    cell.textLabel.text=spec[@"title"];cell.detailTextLabel.text=label;cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+    return cell;
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath{
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    NSDictionary *spec=libraryPreferences()[indexPath.row];
+    UIAlertController *sheet=[UIAlertController alertControllerWithTitle:spec[@"title"] message:nil preferredStyle:UIAlertControllerStyleAlert];
+    for(NSArray *choice in spec[@"choices"]){
+        [sheet addAction:[UIAlertAction actionWithTitle:choice[1] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action){
+            NSString *key=libraryPreferenceKey(spec[@"key"]);
+            if([choice[0] isEqual:@"auto"])[NSUserDefaults.standardUserDefaults removeObjectForKey:key];
+            else [NSUserDefaults.standardUserDefaults setObject:choice[0] forKey:key];
+            [tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:sheet animated:YES completion:nil];
+}
 @end
 @interface LibraryView:UIViewController<UICollectionViewDataSource,UICollectionViewDelegateFlowLayout,UIDocumentPickerDelegate>
 @property(nonatomic,strong)UICollectionView *grid;
@@ -208,16 +305,21 @@ UILabel *sub=[UILabel new];sub.text=@"打开你的游戏卡带";sub.textColor=UI
 UILabel *count=[UILabel new];count.text=@"—\n款卡带";count.numberOfLines=2;count.textAlignment=NSTextAlignmentCenter;count.textColor=UIColor.labelColor;count.font=[UIFont systemFontOfSize:15 weight:UIFontWeightBold];count.backgroundColor=D(238,239,238,45,51,59);count.layer.cornerRadius=14;count.layer.masksToBounds=YES;self.countLabel=count;
 _status=[UILabel new];_status.text=@"正在读取卡带…";_status.textColor=UIColor.secondaryLabelColor;_status.font=[UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
 UIButton *add=[UIButton buttonWithType:UIButtonTypeSystem];UIImageSymbolConfiguration *cfg=[UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightSemibold];[add setImage:[UIImage systemImageNamed:@"plus" withConfiguration:cfg] forState:UIControlStateNormal];add.imageView.contentMode=UIViewContentModeCenter;add.accessibilityLabel=@"添加 Switch 游戏";add.tintColor=UIColor.whiteColor;add.backgroundColor=C(218,50,56);add.layer.cornerRadius=27;add.layer.shadowColor=UIColor.blackColor.CGColor;add.layer.shadowOpacity=0.25;add.layer.shadowRadius=10;add.layer.shadowOffset=CGSizeMake(0,5);[add addTarget:self action:@selector(addGame) forControlEvents:UIControlEventTouchUpInside];
+UIButton *settingsButton=[UIButton buttonWithType:UIButtonTypeSystem];
+[settingsButton setImage:[UIImage systemImageNamed:@"gearshape.fill"] forState:UIControlStateNormal];
+settingsButton.accessibilityLabel=@"全局设置";settingsButton.tintColor=UIColor.labelColor;
+[settingsButton addTarget:self action:@selector(showSettings) forControlEvents:UIControlEventTouchUpInside];
 UICollectionViewFlowLayout *flow=[UICollectionViewFlowLayout new];flow.minimumInteritemSpacing=15;flow.minimumLineSpacing=10;flow.sectionInset=UIEdgeInsetsMake(4,0,68,0);
 _grid=[[UICollectionView alloc]initWithFrame:CGRectZero collectionViewLayout:flow];_grid.backgroundColor=UIColor.clearColor;_grid.dataSource=self;_grid.delegate=self;[_grid registerClass:CoverCard.class forCellWithReuseIdentifier:@"card"];
 for(UIView *v in @[header,_status,_grid,add]){v.translatesAutoresizingMaskIntoConstraints=NO;[self.view addSubview:v];}
-for(UIView *v in @[red,eyebrow,title,sub,count]){v.translatesAutoresizingMaskIntoConstraints=NO;[header addSubview:v];}
+for(UIView *v in @[red,eyebrow,title,sub,count,settingsButton]){v.translatesAutoresizingMaskIntoConstraints=NO;[header addSubview:v];}
 UILayoutGuide *safe=self.view.safeAreaLayoutGuide;
 [NSLayoutConstraint activateConstraints:@[[header.topAnchor constraintEqualToAnchor:safe.topAnchor constant:6],[header.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:18],[header.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-18],[header.heightAnchor constraintEqualToConstant:86],
 [red.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:18],[red.topAnchor constraintEqualToAnchor:header.topAnchor constant:14],[red.bottomAnchor constraintEqualToAnchor:header.bottomAnchor constant:-14],[red.widthAnchor constraintEqualToConstant:5],
 [eyebrow.topAnchor constraintEqualToAnchor:header.topAnchor constant:11],[eyebrow.leadingAnchor constraintEqualToAnchor:red.trailingAnchor constant:14],
-[title.topAnchor constraintEqualToAnchor:eyebrow.bottomAnchor constant:3],[title.leadingAnchor constraintEqualToAnchor:eyebrow.leadingAnchor],[title.trailingAnchor constraintLessThanOrEqualToAnchor:count.leadingAnchor constant:-12],
+[title.topAnchor constraintEqualToAnchor:eyebrow.bottomAnchor constant:3],[title.leadingAnchor constraintEqualToAnchor:eyebrow.leadingAnchor],[title.trailingAnchor constraintLessThanOrEqualToAnchor:settingsButton.leadingAnchor constant:-8],
 [sub.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:1],[sub.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+[settingsButton.trailingAnchor constraintEqualToAnchor:count.leadingAnchor constant:-5],[settingsButton.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],[settingsButton.widthAnchor constraintEqualToConstant:40],[settingsButton.heightAnchor constraintEqualToConstant:44],
 [count.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-17],[count.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],[count.widthAnchor constraintEqualToConstant:68],[count.heightAnchor constraintEqualToConstant:62],
 [_status.topAnchor constraintEqualToAnchor:header.bottomAnchor constant:8],[_status.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:4],
 [_grid.topAnchor constraintEqualToAnchor:_status.bottomAnchor constant:7],[_grid.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:18],[_grid.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-18],[_grid.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
@@ -225,6 +327,7 @@ UILayoutGuide *safe=self.view.safeAreaLayoutGuide;
 - (void)dealloc{[[NSNotificationCenter defaultCenter] removeObserver:self];}
 - (void)viewDidLayoutSubviews{[super viewDidLayoutSubviews];if(!CGSizeEqualToSize(self.lastGridSize,self.grid.bounds.size)){self.lastGridSize=self.grid.bounds.size;[self.grid.collectionViewLayout invalidateLayout];}}
 - (void)showNotice:(NSString *)title detail:(NSString *)detail{UIAlertController *a=[UIAlertController alertControllerWithTitle:title message:detail preferredStyle:UIAlertControllerStyleAlert];[a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];[self presentViewController:a animated:YES completion:nil];}
+- (void)showSettings{if(self.presentedViewController)return;UINavigationController *nav=[[UINavigationController alloc]initWithRootViewController:[LibrarySettingsView new]];nav.modalPresentationStyle=UIModalPresentationPageSheet;[self presentViewController:nav animated:YES completion:nil];}
 - (void)addGame{
     if(self.presentedViewController)return;
     self.status.text=@"正在打开文件选择器…";

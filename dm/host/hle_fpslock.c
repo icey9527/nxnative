@@ -7,6 +7,7 @@
 // copy then the render thread's. The games' configs set the limit to 30 and the interval to 2 (their notes name the .ini files)
 #include "hle.h"
 #include <mach/mach.h>
+#include "frame_limit.h"
 
 // What a field holds: the frame rate as a float, double or int32, vsyncs per frame (60 / frame rate) as an int32, or the frame time in milliseconds as a float. Copies: consecutive copies of the
 // value (Unreal keeps one for the game thread, one for the render thread). A row with no pointer (ptr_off 0) has its field at main + field: a constant in main's read-only data, which the loader
@@ -53,6 +54,8 @@ static const lock_t k_locks[] = {
 #define NLOCKS ((int)(sizeof k_locks / sizeof k_locks[0]))
 
 static int rd(uint64_t a, void *out, size_t n) { vm_size_t got = 0; return a >= 0x1000 && vm_read_overwrite(mach_task_self(), (vm_address_t)a, n, (vm_address_t)out, &got) == KERN_SUCCESS && got == n; }
+
+#include "hle_witcher_timing.inc"
 
 // NFS 1.0.3 has two timer fields and separate 2D/3D frame-time consumers.
 // Writing just its 60-fps flag or changing display Hz leaves the engine cap.
@@ -260,6 +263,7 @@ static void lock_find(void) {
 // presenting at a cap the game does not step by runs a fixed-step game fast or slow (Tears of the Kingdom 1.4.2 at 2x with DM_FPS_TARGET=60)
 int dm_fps_lock_engine(void) { pthread_once(&g_found, lock_find); return nfs_base || nrow || nier || fb.n; }
 void dm_fps_lock_tick(void) {
+    witcher_fps_tick();
     nfs_fps_tick();
     dynamic_resolution_tick();   // separate from the FPS cap
     static int state = -2, nlog[NLOCKS + 3], target; static const char *src;

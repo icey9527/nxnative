@@ -114,3 +114,19 @@ An unlimited frame-rate setting does not guarantee 60/120 FPS. Experimental
 image optical-flow interpolation and spatial MetalFX are not Apple's native
 MetalFX frame interpolator, and game-clock correctness still needs per-game
 validation. See the [current limits](fork-status.md).
+
+
+## Frame-rate preference
+
+TonTon's iPhone and iPad library defaults to **Unlimited** (`DM_FRAME_LIMIT=unlimited`),
+with **Original game settings** available in global settings. This removes the
+host's extra presentation wait. It is not a promise that every game's internal
+30-FPS limiter has been removed. Fixed-step adapters and movie clocks still take
+precedence where removing them would change game speed. Each engine needs its
+own verified limiter/elapsed-time integration; the FPS counter reports measured
+frames rather than the display refresh rate.
+
+Witcher 3 build `b151a224a429f9a73abb05c5a3de9468` separately clears its engine
+`LimitFPS` under this policy, preserving its dynamic-resolution budgets and
+simulation/movie timing. Other builds are not written using these addresses.
+Actual uncapped performance and the remaining image fixes require device tests.

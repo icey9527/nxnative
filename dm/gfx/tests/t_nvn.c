@@ -90,6 +90,17 @@ int main(void) {
       EXPECT("a frame step page needs no limiter",60,fps_present_cap());
       dm_fps_state=NULL;unsetenv("DM_FPS_TARGET");g_present_cap=-1;g_engine_stub=1;nvn_present_config(0,0);
     }
+    { // iPhone and iPad share the same explicit library policy.
+      win_t w={.interval=2};dm_fps_state=NULL;g_present_cap=-1;
+      setenv("DM_FRAME_LIMIT","unlimited",1);setenv("DM_FPS_TARGET","30",1);
+      nvn_present_config(-1,0);
+      EXPECT("unlimited host removes software present wait",0,present_period(&w));
+      EXPECT("unlimited ignores old native cap preference",0,fps_present_cap());
+      EXPECT("unlimited does not inherit interval two",1,present_itv(&w));
+      _Alignas(8) uint8_t state[64]={0};float cap=60;memcpy(state,&cap,4);dm_fps_state=state;
+      EXPECT("fixed-step clock adapter is preserved",60,fps_present_cap());
+      dm_fps_state=NULL;unsetenv("DM_FRAME_LIMIT");unsetenv("DM_FPS_TARGET");g_present_cap=-1;nvn_present_config(0,0);
+    }
     crash_install();   // the same SIGSEGV / SIGBUS handling as production (the page-fault hook is dispatched from within it)
     // 1. Bootstrap address lookup: bootstrap gets GetProcAddress, then uses it to get all the names
     PFNNVNBOOTSTRAPLOADERPROC boot = (PFNNVNBOOTSTRAPLOADERPROC)h_nvnBootstrapLoader;

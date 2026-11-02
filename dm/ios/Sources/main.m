@@ -24,6 +24,7 @@
 #endif
 #include "romfs_identity.h"
 #include "player_env.h"
+#include "frame_limit.h"
 #ifndef DM_PLAYER_BUILD
 #define DM_PLAYER_BUILD 0
 #endif
@@ -248,6 +249,10 @@ static int boot_env(void) {
             setenv("DM_NVN_SHDUMP", dump.fileSystemRepresentation, 1);
         else { unsetenv("DM_NVN_SHDUMP"); fprintf(stderr, "[RED] boot: shader dump directory unavailable: %s\n", error.localizedDescription.UTF8String); }
     }
+    // Default for every iPhone/iPad, independent of device/GPU generation.
+    // Explicit launch/environment preferences can retain original game pacing.
+    if (!getenv("DM_FRAME_LIMIT")) setenv("DM_FRAME_LIMIT", "unlimited", 0);
+    if (dm_frame_limit_unlimited()) setenv("DM_PRESENT_LINK", "2", 1);
     setenv("DM_ENV_FILE_KEYS", [from_file componentsJoinedByString:@" "].UTF8String, 1);   // the launcher keeps what an env file set (LauncherSettings.swift)
     setenv("DM_ENV_LAUNCH_KEYS", [from_launch componentsJoinedByString:@" "].UTF8String, 1);   // and what the launch environment set (docs/frontends.md, Saved choices)
     front_hud_env();   // an env file's DM_METAL_HUD; nothing in this process makes a Metal device before startGame (front_ios.m), which applies the launcher's
@@ -342,6 +347,7 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
             [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
             [owner.window.rootViewController presentViewController:alert animated:YES completion:nil];return;
         }
+        TonTonApplyGlobalSettings(titleID);
         g_boot_ok=1;
         owner.window.rootViewController=front_ios_root();
     });
