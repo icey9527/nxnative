@@ -40,7 +40,7 @@ void dm_guest_write_prepare(void *addr, size_t size) { (void)addr; (void)size; }
 void gate_obs_set(int id, void (*fn)(uint64_t *, int)) { (void)id; (void)fn; }
 
 static size_t page, old_size, requested;
-static int calls, replacements, injected_error, last_prot;
+static int calls, map_calls, injected_error, injected_map_error, last_prot;
 static volatile sig_atomic_t abort_validated;
 static void *last_addr;
 static size_t last_size;
@@ -56,16 +56,17 @@ static int heap_mprotect(void *addr, size_t size, int prot) {
 }
 static void *heap_mmap(void *addr, size_t size, int prot, int flags, int fd, off_t offset) {
     if (flags & MAP_FIXED) {
-        replacements++; last_addr = addr; last_size = size; last_prot = prot;
+        map_calls++; last_addr = addr; last_size = size; last_prot = prot;
+        assert(flags == (MAP_PRIVATE | MAP_ANON | MAP_FIXED) && fd == -1 && offset == 0);
+        assert(prot == PROT_NONE);
         assert(g_heap_cur == old_size && regs[0] == sentinel && regs[1] == requested);
-        assert(prot == PROT_NONE && (flags & (MAP_PRIVATE | MAP_ANON)) == (MAP_PRIVATE | MAP_ANON));
-        if (injected_error) { errno = injected_error; return MAP_FAILED; }
+        if (injected_map_error) { errno = injected_map_error; return MAP_FAILED; }
     }
     return mmap(addr, size, prot, flags, fd, offset);
 }
 static int correct_call(void) {
     int grow = requested > old_size;
-    return (grow ? calls == 1 && !replacements : replacements == 1 && calls == !!injected_error) &&
+    return calls == (grow || injected_map_error ? 1 : 0) && map_calls == (grow ? 0 : 1) &&
         last_addr == g_heap + (grow ? old_size : requested) &&
         last_size == (grow ? requested - old_size : old_size - requested) &&
         last_prot == (grow ? PROT_READ | PROT_WRITE : PROT_NONE);
@@ -81,7 +82,7 @@ static _Noreturn void heap_abort(void) {
     abort();
 }
 static void request(size_t size) {
-    old_size = g_heap_cur; requested = size; calls = replacements = 0;
+    old_size = g_heap_cur; requested = size; calls = map_calls = 0;
     memset(regs, 0, sizeof regs); regs[0] = sentinel; regs[1] = size;
     assert(svc_dispatch(0x01, regs, 0) == 0);
 }
@@ -89,7 +90,7 @@ static void success(size_t size) {
     injected_error = 0;
     request(size);
     assert(g_heap_cur == size && regs[0] == 0 && regs[1] == (uint64_t)g_heap);
-    assert(size == old_size ? calls == 0 && replacements == 0 : correct_call());
+    assert(size == old_size ? calls == 0 && map_calls == 0 : correct_call());
     assert(dm_guest_heap_readable((uint64_t)g_heap, size));
     assert(!dm_guest_heap_readable((uint64_t)g_heap, size + 1));
     if (size) { g_heap[0] = 0x5a; g_heap[size - 1] = 0xa5; }
@@ -99,7 +100,7 @@ static void failure(size_t size, int error) {
     pid_t p = fork(); assert(p >= 0);
     if (!p) {
         signal(SIGABRT, aborted); alarm(5);
-        injected_error = error;
+        injected_error = injected_map_error = error;
         request(size);
         _exit(79);   // Any return to the guest, even with untouched registers, is wrong.
     }
@@ -122,8 +123,8 @@ int main(void) {
     success(2 * page); used_memory(2 * page);   // initial growth
     success(3 * page); used_memory(3 * page);   // further growth
     success(page); used_memory(page);         // shrink
-    injected_error = EACCES; errno = EACCES; request(page);   // unchanged: no host mapping operation despite stale errno
-    assert(calls == 0 && g_heap_cur == page && regs[0] == 0 && regs[1] == (uint64_t)g_heap);
+    injected_error = EACCES; errno = EACCES; request(page);   // unchanged: no host operation despite stale errno
+    assert(calls == 0 && map_calls == 0 && g_heap_cur == page && regs[0] == 0 && regs[1] == (uint64_t)g_heap);
     failure(3 * page, ENOMEM); failure(3 * page, EACCES);   // failed growth
     success(3 * page);                        // successful retry from the unchanged parent state
     failure(page, ENOMEM); failure(page, EACCES);         // failed shrink
@@ -131,6 +132,12 @@ int main(void) {
     success(0); used_memory(0);
     success(0);                              // unchanged empty heap
     success(page); success(0);               // regrowth after release
+    success(3 * page);
+    injected_map_error = ENOMEM;             // failed replacement, successful protection fallback
+    success(page); used_memory(page);
+    success(0); used_memory(0);
+    injected_map_error = 0;
+    success(page); success(0);               // regrowth after the fallback release
     free(g_alias_bits); free(g_alias_exposed);
     assert(munmap(g_as, RESERVE) == 0);
     puts("SetHeapSize production dispatcher: growth, shrink, unchanged, zero, failure state and fail-fast passed");
