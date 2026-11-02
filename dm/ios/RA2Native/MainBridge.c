@@ -19,8 +19,11 @@ int TonTonRedAlertMain(int argc, char **argv) {
     if (argc < 1 || argc > 32 || !argv) return 64;
     for (int i = 0; i < argc; i++) {
         if (!argv[i]) return 64;
-        if (!strcmp(argv[i], "--record")) {
-            fprintf(stderr, "[ra2-ios] Desktop subprocess recording is unavailable on iOS\n");
+        /* The desktop host expands --args files before parsing --record.
+         * Reject indirection here so it cannot bypass the subprocess guard. */
+        if (!strcmp(argv[i], "--record") || !strncmp(argv[i], "--record=", 9) ||
+            !strcmp(argv[i], "--args") || !strncmp(argv[i], "--args=", 7)) {
+            fprintf(stderr, "[ra2-ios] Desktop recording and argument files are unavailable on iOS\n");
             return 64;
         }
     }

@@ -20,7 +20,10 @@ All other HLE source files remain unchanged.
 entry is renamed to `ra2_desktop_main`. It checks the UIKit main thread,
 arguments, and configured writable settings directory, and calls
 `SDL_SetMainReady` before the engine. It rejects the desktop recorder's
-subprocess option. This is an entry guard, not the complete TonTon lifecycle
+subprocess option and `--args` files, which the desktop entry expands before
+option parsing and could otherwise use to bypass that guard. Tests compile the
+production bridge with a stub engine; they never enter the commercial game.
+This is an entry guard, not the complete TonTon lifecycle
 or save-file integration.
 
 The font adapter asks CoreText for a readable system font file, preserving
