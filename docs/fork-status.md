@@ -11,9 +11,11 @@ Start with the [build and installation guide](ios16-ios17.md).
 
 ## Upstream integration and resource compatibility
 
-Upstream `cde88f62068e3d879b083b1a86a7fd78610c7b7b` was fetched and fully merged
+Upstream `372a8d8a0404bd0d0bdc9928a674b0d9c0104b5e` was fetched and fully merged
 on 2026-11-01, including the previous full integration through `8ea27784`.
-The added upstream fix bounds the Need for Speed Bundle 2 resource reader.
+The merged upstream changes include the bounded Need for Speed Bundle 2 reader
+and independent mmap/mprotect failure fixtures; the fork retains its alias
+exposure checks.
 This is a merge, not a rebase or a claim that merely fetching updated the fork.
 Before each further change batch, fetch and merge the latest upstream in a
 clean isolated checkout, resolve conflicts and test both renderer targets.

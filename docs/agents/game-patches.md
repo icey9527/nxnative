@@ -404,8 +404,8 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - host [hle_fpslock.c:44](../../dm/host/hle_fpslock.c#L44): engine frame limit set to fps_target: Criterion frame ticks / 10
   - host [hle_fpslock.c:45](../../dm/host/hle_fpslock.c#L45): engine frame limit set to fps_target: Criterion 2D game step
   - host [hle_fpslock.c:46](../../dm/host/hle_fpslock.c#L46): engine frame limit set to fps_target: Criterion 3D game step
-  - host [hle_fpslock.c:71](../../dm/host/hle_fpslock.c#L71): build check
-  - host [hle_fpslock.c:255](../../dm/host/hle_fpslock.c#L255): build check
+  - host [hle_fpslock.c:72](../../dm/host/hle_fpslock.c#L72): build check
+  - host [hle_fpslock.c:270](../../dm/host/hle_fpslock.c#L270): build check
   - host [nfs_driving_input.h:13](../../dm/host/nfs_driving_input.h#L13): build check
 
 ### NieR:Automata The End of YoRHa Edition (010056B015FE8000)
@@ -425,7 +425,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - cut `+0x9bf4d4`: dynamic resolution: optimal frame cost 32.01 -> 16.005 ms at 60 fps (second load)
   - cut `+0x9bf4f8`: dynamic resolution: good frame cost 30 -> 15 ms at 60 fps
   - launcher capabilities: DYNAMIC_RESOLUTION
-  - host [hle_fpslock.c:118](../../dm/host/hle_fpslock.c#L118): frame interval and dynamic-resolution floor
+  - host [hle_fpslock.c:133](../../dm/host/hle_fpslock.c#L133): frame interval and dynamic-resolution floor
 
 ### NieR:Automata The End of YoRHa Edition (0100B8E016F76000)
 
@@ -444,7 +444,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - cut `+0x9c08e8`: dynamic resolution lower bound follows the selected preset
   - cut `+0x9c08f4`: dynamic resolution lower bound follows the selected preset
   - launcher capabilities: DYNAMIC_RESOLUTION
-  - host [hle_fpslock.c:119](../../dm/host/hle_fpslock.c#L119): frame interval and dynamic-resolution floor
+  - host [hle_fpslock.c:134](../../dm/host/hle_fpslock.c#L134): frame interval and dynamic-resolution floor
 
 ### Paper Mario: The Thousand-Year Door
 

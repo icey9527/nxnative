@@ -130,3 +130,10 @@ Witcher 3 build `b151a224a429f9a73abb05c5a3de9468` separately clears its engine
 `LimitFPS` under this policy, preserving its dynamic-resolution budgets and
 simulation/movie timing. Other builds are not written using these addresses.
 Actual uncapped performance and the remaining image fixes require device tests.
+
+Need for Speed build `799d1061182c1302e08e706b84ce76e5` uses measured active
+frame durations under the unlimited policy, updating both 2D and 3D timing
+together. Its exact-build busy-wait repair is still required. Variable-rate
+clock tests pass; real-device performance and driving-speed validation remain
+pending. Other engines with fixed-step adapters retain their safety limits
+until their own elapsed-time integration is verified.

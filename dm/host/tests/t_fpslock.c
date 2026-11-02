@@ -9,6 +9,8 @@
 static module_t test_modules[1];
 module_t *g_mod = test_modules;
 int g_nmod;
+static uint64_t test_guest_time=1000000000ull;
+uint64_t guest_ns(void) { return test_guest_time; }
 static int writes;
 void dm_guest_write_prepare(void *p, size_t n) { (void)p; assert(n == 4 || n == 8); writes++; }
 

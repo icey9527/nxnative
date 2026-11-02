@@ -61,7 +61,8 @@ static int rd(uint64_t a, void *out, size_t n) { vm_size_t got = 0; return a >= 
 // Writing just its 60-fps flag or changing display Hz leaves the engine cap.
 // Match FPSLocker's exact-build configuration; never apply these addresses to
 // another build, or without the rewriter's asserted busy-wait repair.
-static int nfs_init, nfs_target, nfs_logged; static uint8_t *nfs_base;
+static int nfs_init, nfs_target, nfs_logged, nfs_unlimited; static uint8_t *nfs_base;
+static uint64_t nfs_last_guest_ns;
 void dm_nfs_timing_init(void) {
     int *initialized = &nfs_init;
     if (*initialized) return;
@@ -79,10 +80,10 @@ void dm_nfs_timing_init(void) {
         LOG("[RED] DM_NFS_FPS must be 0, 30, 60 or 120; using original 30"); target = 30;
     }
     if (!target) target = 30;
-    nfs_base=base; nfs_target=target;
+    nfs_base=base; nfs_target=target; nfs_unlimited=dm_frame_limit_unlimited();
     // Configure before the game initializes Metal/the display link. A 120-Hz
     // screen request alone leaves NVN's independent default 60-Hz pacer active.
-    char hz[16]; snprintf(hz,sizeof hz,"%d",target);
+    char hz[16]; snprintf(hz,sizeof hz,"%d",nfs_unlimited?0:target);
     setenv("DM_PRESENT_HZ",hz,1); setenv("DM_PRESENT_INTERVAL","display",1); setenv("DM_PRESENT_LINK","2",1);
 }
 static void nfs_fps_tick(void) {
@@ -94,15 +95,29 @@ static void nfs_fps_tick(void) {
         !rd((uintptr_t)base + 0xeffc60, &step, 8) || !step) return;
     const uint64_t addresses[] = {(uintptr_t)base + 0xf0043c, timer + 0x30, timer + 0x28, step + 0x30, step + 0x50};
     uint32_t old[5], want[5] = {target >= 60, 19200000u / target, 1920000u / target, 0, 0};
-    float seconds = 1.0f / target; memcpy(&want[3], &seconds, 4); want[4] = want[3];
+    float seconds = 1.0f / target;
+    uint64_t now=0;
+    if(nfs_unlimited) {
+        now=guest_ns();
+        uint64_t elapsed=nfs_last_guest_ns && now>nfs_last_guest_ns ? now-nfs_last_guest_ns : 1000000000ull/(unsigned)target;
+        // The guest clock excludes host freeze/suspend. Both timing consumers
+        // receive the same real duration, independent of frame/display rate.
+        // A representable Switch tick interval is required before any write.
+        __uint128_t ticks=(__uint128_t)elapsed*19200000u/1000000000u;
+        if(!ticks || ticks>UINT32_MAX) return;
+        want[0]=1;want[1]=(uint32_t)ticks;want[2]=(uint32_t)(ticks/10);
+        seconds=(float)((double)elapsed/1e9);
+    }
+    memcpy(&want[3], &seconds, 4); want[4] = want[3];
     // Validate every destination before changing any field. Null/uninitialized
     // managers occur during loading; do not dereference or partially update them.
     for (int i = 0; i < 5; i++) if (!rd(addresses[i], &old[i], 4)) return;
     if (old[0] > 1) return;
+    if(nfs_unlimited) nfs_last_guest_ns=now;
     for (int i = 0; i < 5; i++) if (old[i] != want[i]) {
         uint32_t *p = (uint32_t *)(uintptr_t)addresses[i]; dm_guest_write_prepare(p, 4); __atomic_store_n(p, want[i], __ATOMIC_RELAXED);
     }
-    if (!nfs_logged) { nfs_logged=1; LOG("main: NFS timer, tolerance and 2D/3D frame targets = %d fps (DM_NFS_FPS; actual performance unverified)", target); }
+    if (!nfs_logged) { nfs_logged=1; LOG("main: NFS timing %s, nominal %d fps; 2D/3D steps agree (actual performance unverified)", nfs_unlimited?"unlimited, real elapsed clock":"fixed target", target); }
 }
 
 // NieR 1.0.3 exposes its preset minimum but ships fixed mode-specific fallbacks.

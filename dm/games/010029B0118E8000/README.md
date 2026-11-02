@@ -121,6 +121,16 @@ NVN pacing rate and its display-link mode, before Metal initialization. An unset
 120. This is a target, not measured performance: actual gameplay speed,
 stability and frame rate at 120 still need the owner's testing.
 
+With TonTon's `DM_FRAME_LIMIT=unlimited` library preference, this same exact-build
+adapter now writes one measured active-guest-clock duration to the timer, tolerance
+and both 2D/3D consumers, instead of assuming every rendered frame lasts 1/120 s.
+The verified busy-wait repair remains required. Eleven production timing cases,
+including 400 changing-rate steps at 120/60/40/20 Hz, pass under ASan/UBSan.
+The summed simulation time agrees with measured active time in the test; real
+device driving speed and suspension behavior remain pending owner testing.
+Explicit fixed targets retain their previous behavior with the original-game
+library preference. This adapter does not change the race-only drift mapping.
+
 Candidate `20261029.9` passes a full minimum-16.1 host build and legacy resource
 audit. Its packaged fixup marker, five added libraries/reflection files,
 30/60/120 launcher choices and startup timing entry point were checked. Ten
