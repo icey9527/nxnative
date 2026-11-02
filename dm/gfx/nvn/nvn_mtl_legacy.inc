@@ -30,6 +30,7 @@
 #include "../tex/nvn_bc2astc.h"
 #include "../tex/bc2astc_msl.h"   // nvn_bca_msl: BC1/2/3 -> ASTC 4x4 GPU transcoder
 #include "nvn_builtin.h"
+#include "host_msl.h"
 #include "nvn_dirty.h"
 #include "nvn_refl.h"
 #include "nvn_cover.h"
@@ -3814,7 +3815,7 @@ static NvShader *builtin_get(const char *ctl) {
         NvShader *o = g_builtin[@(ctl)];
         if (o) return o;
         if (!g_builtin_lib) {
-            NSError *e = nil; g_builtin_lib = [g_dev newLibraryWithSource:@(k_nvn_builtin_msl) options:nil error:&e];
+            NSError *e = nil; g_builtin_lib = host_msl_lib(g_dev, nil, "builtin", &e);
             if (!g_builtin_lib) MDIE("内嵌计算核 MSL 编译失败：%s", e.localizedDescription.UTF8String);
         }
         o = [NvShader new]; o->fn = [g_builtin_lib newFunctionWithName:@(k_nvn_builtin_map[i].fn)]; o->stage = 5; o->builtin = k_nvn_builtin_map[i].fn;

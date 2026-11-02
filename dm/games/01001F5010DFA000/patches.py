@@ -26,3 +26,5 @@ task_trace_obs = [
 OBS = {"aee8f150dda1b5a838806e1a5ea6827a": display_obs + task_trace_obs}
 
 CAPABILITIES = {"aee8f150dda1b5a838806e1a5ea6827a": ("ARCEUS_TIMING",)}
+
+BINDING = [{"what": 'Arceus camera, HUD, timing and task-object observation sites', "now": "build", "goal": "unreviewed", "purpose": 'rendering', "why": "Exact instructions and offsets are verified only for the registered builds; general matching has not been reviewed."}]

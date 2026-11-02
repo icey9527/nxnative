@@ -24,6 +24,7 @@ static OSStatus mock_AudioOutputUnitStop(AudioUnit);
 #define AudioOutputUnitStart mock_AudioOutputUnitStart
 #define AudioOutputUnitStop mock_AudioOutputUnitStop
 #include "../hle_audio.c"
+int dm_guest_as_contains(uintptr_t a) { (void)a; return 0; }
 #undef AudioComponentFindNext
 #undef AudioComponentInstanceNew
 #undef AudioComponentInstanceDispose

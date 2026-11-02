@@ -22,6 +22,8 @@ typedef struct {
     int fps_target, fps_hold, present_snap, pso_mtl4, pad_layout;
     int opmode, perf_boost, tex_flush_upload, render_cond, tex_dirty_upload;
     int tex_dyn_slots, gpu_ts_segment, vconv_range;
+    const char *ue_fps_cvar;
+    int ue_texture_pool, enc_thread, shader_key_skip_off, shader_key_skip_len;
     int shared_font_ttf; // -1: SDK/import default
     int nvn_api_major, nvn_api_minor; // -1: SDK default
 } dm_game_profile;

@@ -83,6 +83,10 @@ HOST_BINDING = [
     ('k_nier_dr', '', '', {'what': "NieR's frame interval and dynamic-resolution floor at fixed addresses", 'now': 'build', 'goal': 'game', 'purpose': 'frame rate',
      'checked': "both releases' mains, where these rows were found",
      'why': "the game's own display object; the Asian release's function is the global one's 0x13c0 further on, so the rewriter's function match could give the host both releases' addresses"}),
+    ('', '', 'aee8f150dda1b5a838806e1a5ea6827a', {'what': 'Arceus exact-build camera, HUD, timing and task diagnostics', 'now': 'build', 'goal': 'game', 'purpose': 'rendering', 'why': 'Fixed instruction layouts verified on the registered build; addresses must be discovered or matched before other updates can share them.', 'blocked': 'No reviewed function matcher for these host accesses.'}),
+    ('', '', 'b1f12fd919eae86ab8a978317677e64b', {'what': 'Z-A exact-build camera, HUD and timing', 'now': 'build', 'goal': 'game', 'purpose': 'rendering', 'why': 'Fixed instruction layouts verified on the registered build; addresses must be discovered or matched before other updates can share them.', 'blocked': 'No reviewed function matcher for these host accesses.'}),
+    ('', '', '709bfd66115298640155fcc4979dba15', {'what': 'Violet exact-build camera and HUD', 'now': 'build', 'goal': 'game', 'purpose': 'rendering', 'why': 'Fixed instruction layouts verified on the registered build; addresses must be discovered or matched before other updates can share them.', 'blocked': 'No reviewed function matcher for these host accesses.'}),
+    ('', '', '799d1061182c1302e08e706b84ce76e5', {'what': 'Criterion validated simulation and frame-rate writes', 'now': 'build', 'goal': 'game', 'purpose': 'frame rate', 'why': 'Fixed instruction layouts verified on the registered build; addresses must be discovered or matched before other updates can share them.', 'blocked': 'No reviewed function matcher for these host accesses.'}),
 ]
 # Translator rules keyed by one shader's code hash: (the start of the rule's comment, entry)
 SHADER_BINDING = [

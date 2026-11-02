@@ -209,7 +209,7 @@ static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioT
             atomic_store_explicit(&a->st_pending, 1, memory_order_release);
             a->st_fmin = ~0u; a->st_fmax = 0; a->st_qsum = a->st_count = 0; a->st_u0 = un; a->st_ub0 = ubb;
         } }
-    pull_device(a, bl->mBuffers[0].mData, bl->mBuffers[0].mDataByteSize);
+    backend_pull(a, BK_AU, bl->mBuffers[0].mData, bl->mBuffers[0].mDataByteSize);
     if (a->mute) memset(bl->mBuffers[0].mData, 0, bl->mBuffers[0].mDataByteSize);
     au_meter_publish(a, bl->mBuffers[0].mData, bl->mBuffers[0].mDataByteSize / 2);
     return noErr;

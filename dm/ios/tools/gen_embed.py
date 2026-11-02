@@ -4,7 +4,7 @@
 # At run time the loader leaves both code ranges in their signed __TEXT addresses and replaces only the zero-filled hole with a copy-on-write mapping of W. This never creates executable memory or a second executable segment.
 # Negative PATCH_OFF builds additionally embed the upstream optional x2 back-patch section.
 #   Modules with the patch area before the base (negative PATCH_OFF, see patch_nso.py FAR): W is [round16K(TEXT_END), FILE_IMAGE_LEN), x1 is the patch area after FILE_IMAGE_LEN in the file; bss and the key page are not in the executable
-# Modules with a negative PATCH_OFF retain the older three-piece representation for now.
+# Packed NROs use three pieces; a namespaced NRO table is rejected until its loader is implemented.
 # Usage: gen_embed.py [--namespace XY] <build output dir> <output .S> <module name...>; link flags are printed to stdout (-segprot for the W segment)
 import os, sys
 args = sys.argv[1:]
@@ -48,7 +48,6 @@ for n in names:
         for sect, (lo, hi) in zip((f'__TEXT,__dm{tag}x0', f'__DM{tag}W,__img', f'__TEXT,__dm{tag}x1', f'__TEXT,__dm{tag}x2'), parts):
             assert all(len(x) <= 16 for x in sect.split(','))
             asm.append(f'    .section {sect}'); place(asm, bin_, sz, lo, hi)
-        flags.append(f'-Wl,-segprot,__DM{tag}W,rw,rw')
     else:
         assert po % PG == 0 and a <= ko and ko + ks <= po and ko % PG == 0 and ks == PG
         text_sect = f'__TEXT,__dm{tag}img,regular,pure_instructions'

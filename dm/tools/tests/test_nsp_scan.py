@@ -42,7 +42,14 @@ class Scan(unittest.TestCase):
 
     def test_appledouble_skipped_quietly(self):
         base = self.tmp / f'Game [{APP:016X}][v0].nsp'; pfs0(base, [f'{APP:016x}0000000000000011.tik'])
-        (self.tmp / ('._' + base.name)).write_bytes(b'\0\x05\x16\x07' + b'\0' * 4092)
+        (self.tmp / ('._' + base.name)).write_bytes(b'\0\x05\x16\x07\0\x02\0\0' + b'\0' * 4088)
+        self.assertEqual(nsp.scan_nsps(self.tmp)[1]['base'], base)
+        self.assertEqual(self.said, [])
+
+
+    def test_normal_package_with_appledouble_style_name_is_preserved(self):
+        base = self.tmp / f'._Game [{APP:016X}][v0].nsp'
+        pfs0(base, [f'{APP:016x}0000000000000011.tik'])
         self.assertEqual(nsp.scan_nsps(self.tmp)[1]['base'], base)
         self.assertEqual(self.said, [])
 

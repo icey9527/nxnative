@@ -41,8 +41,8 @@ class GfpakOodle(unittest.TestCase):
     def test_build_requests_decoder_only_on_the_nvn_path(self):
         args = ({'nvnBootstrapLoader'}, 0, [], 0, 0)
         self.assertFalse(profile.shader_sources(*args)['oodle_packs'][0])
-        self.assertTrue(profile.shader_sources(*args, oodle_gfpaks=1)['oodle_packs'][0])
-        self.assertFalse(profile.shader_sources({'vkCreateInstance'}, 0, [], 0, 0, oodle_gfpaks=1)['oodle_packs'][0])
+        self.assertTrue(profile.shader_sources(*args, oodle_gfpak=1)['oodle_packs'][0])
+        self.assertFalse(profile.shader_sources({'vkCreateInstance'}, 0, [], 0, 0, oodle_gfpak=1)['oodle_packs'][0])
 
 
 if __name__ == '__main__':

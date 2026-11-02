@@ -29,3 +29,5 @@ OBS = {
     (0x1802f50, 30, '3cc04120', 'HUD rectangle: orig ldur q0,[x9,#4]; optional screen-aspect shadow rectangle'),
   ],
 }
+
+BINDING = [{"what": 'Z-A startup cuts and camera, HUD and clock observations', "now": "build", "goal": "unreviewed", "purpose": 'runtime', "why": "Exact instructions and offsets are verified only for the registered builds; general matching has not been reviewed."}]

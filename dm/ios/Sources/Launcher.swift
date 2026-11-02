@@ -16,8 +16,8 @@ private extension View {
     }
 }
 
-/// Cloud saves: an iCloud Drive folder shared with the Mac app (chosen in its settings window's
-/// Cloud saves too). The host brings the save in from there when the game starts and
+/// 云存档: an iCloud Drive folder shared with the Mac app (chosen in its settings window's
+/// 云存档 too). The host brings the save in from there when the game starts and
 /// sends it there after each save (dm/host/save_sync.h); the folder is a bookmark (CloudSaves.m).
 private struct CloudSavesSection: View {
     @State private var folder: String = ""
@@ -27,32 +27,32 @@ private struct CloudSavesSection: View {
     var body: some View {
         Section {
             HStack {
-                Text("Cloud saves")
+                Text("云存档")
                 Spacer()
-                Text(folder.isEmpty ? "Off" : (folder as NSString).lastPathComponent)
+                Text(folder.isEmpty ? "关闭" : (folder as NSString).lastPathComponent)
                     .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
-            Button(folder.isEmpty ? "Choose a folder in iCloud Drive…" : "Choose a different folder…") { picking = true }
+            Button(folder.isEmpty ? "选择 iCloud 云盘文件夹…" : "选择其他文件夹…") { picking = true }
                 // The sheet sits on the button, not on the Section: SwiftUI hands a Section's modifiers to every row, so one tap presented a picker per row and they invalidated each other (LNPANDY/NX2Apple#315).
                 .sheet(isPresented: $picking) {
                     DocumentPicker(types: [.folder]) { url in
                         picking = false
                         if dm_store_cloud_saves(url) {
-                            note = "Saved. The game uses this folder when you press Play."
+                            note = "已保存。开始游戏后将使用此文件夹。"
                             refresh()
                         } else {
-                            note = "That folder could not be remembered — try a different one."
+                            note = "无法保存此文件夹，请选择其他文件夹。"
                         }
                     } onCancel: { picking = false }
                 }
             if !folder.isEmpty {
-                Button("Turn off cloud saves", role: .destructive) {
+                Button("关闭云存档", role: .destructive) {
                     dm_clear_cloud_saves(); refresh(); note = ""
                 }
             }
         } footer: {
             Text(note.isEmpty
-                 ? "Choose a folder in iCloud Drive, and the same one in the Mac app's Cloud saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups."
+                 ? "请选择 iCloud 云盘文件夹，并在 Mac 端选择同一文件夹。游戏启动时读取云存档，保存后同步；被替换的存档保留在 save-backups 中。"
                  : note)
         }
         .onAppear(perform: refresh)
@@ -62,7 +62,7 @@ private struct CloudSavesSection: View {
         var stale: ObjCBool = false
         folder = dm_cloud_saves_path(&stale) ?? ""
         if stale.boolValue && folder.isEmpty {
-            note = "The folder you chose before is no longer readable (the app was signed differently). Please choose it again."
+            note = "之前选择的文件夹已无法读取（应用签名已改变），请重新选择。"
         }
     }
 }

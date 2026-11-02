@@ -41,7 +41,7 @@ static int sbuf_rw(NSDictionary *b) { id rw = b[@"rw"]; if (rw) return [rw boolV
 // unresolved. The translator's name retains the full TextureHandle encoding.
 // Recover only type 2 with a matching resolved texture, never a guessed slot 0.
 static int legacy_sampler_id(NSDictionary *b, NSArray *bindings, nvn_rbind *r) {
-    if (![b[@"kind"] isEqual:@"samp"] || ![b[@"msl_type"] isEqual:@"sampler"] ||
+    if (![b[@"kind"] isEqual:@DMSH_KIND_SAMP] || ![b[@"msl_type"] isEqual:@"sampler"] ||
         [b[@"reg"] isKindOfClass:[NSNumber class]]) return 0;
     NSString *name = b[@"msl_name"];
     if (![name isKindOfClass:[NSString class]]) return 0;
@@ -54,12 +54,12 @@ static int legacy_sampler_id(NSDictionary *b, NSArray *bindings, nvn_rbind *r) {
     unsigned sb = (unsigned)(banks >> 16);
     if (sb < 4 || sb > 17) return 0; // encoded second bank = c[3..16] + 1
     unsigned byte = (h & 0x3fff) * 4, texture;
-    if (byte >= 0x168 && byte < 0x568 && !((byte - 0x168) & 7)) texture = 128 + (byte - 0x168) / 8;
-    else if (byte >= 0x20 && byte < 0x168 && !((byte - 0x20) & 7)) texture = (byte - 0x20) / 8;
+    if (byte >= DMSH_C2_SEPTEX && byte < DMSH_C2_SAMP && !((byte - DMSH_C2_SEPTEX) % DMSH_C2_ROW)) texture = DMSH_SEPTEX_SLOT0 + (byte - DMSH_C2_SEPTEX) / DMSH_C2_ROW;
+    else if (byte >= DMSH_C2_TEX && byte < DMSH_C2_SEPTEX && !((byte - DMSH_C2_TEX) % DMSH_C2_ROW)) texture = (byte - DMSH_C2_TEX) / DMSH_C2_ROW;
     else return 0;
     NSString *texture_name = [name substringToIndex:name.length - 5];
     for (NSDictionary *t in bindings) if ([t[@"msl_name"] isEqual:texture_name] &&
-        [t[@"kind"] isEqual:@"tex"] && [t[@"reg"] isKindOfClass:[NSNumber class]] &&
+        [t[@"kind"] isEqual:@DMSH_KIND_TEX] && [t[@"reg"] isKindOfClass:[NSNumber class]] &&
         [t[@"reg"] unsignedIntValue] == texture && [t[@"msl_type"] hasPrefix:@"texture"]) {
         r->kind = NVN_RB_SAMPU; r->reg = (uint16_t)(sb - 4);
         r->off = (uint16_t)(((h >> 14) & 0x3fff) * 4); r->samp_raw = 1;

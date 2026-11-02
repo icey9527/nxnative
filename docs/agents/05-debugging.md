@@ -177,9 +177,9 @@ Pipeline link errors depend only on the two libraries, so all vertex / pixel pai
 
 ## Intermittent rendering glitches
 
-A glitch that comes and goes between frames or runs needs a detector before bisection, or "no glitch in these 16 frames" proves nothing. What worked for Mario's fountain panels:
+Intermittent glitches need a detector before bisection; clean frames alone prove nothing. For Mario's fountain panels:
 
-1. Screenshot a dense frame range (`DM_NVN_SHOT=$(seq -s, 4430 10 4590):x_%d.png`) and score each frame automatically. The first metric (texture busyness) missed the flat translucent variant of the glitch; a metric tuned to its shape (long vertical straight edges in a sky region) separated glitch frames (≈1.0) from clean ones (≈0.3) reliably. Look at a few frames by eye before trusting a metric.
+1. Screenshot a dense frame range (`DM_NVN_SHOT=$(seq -s, 4430 10 4590):x_%d.png`) and score each frame automatically. The first metric (texture busyness) missed the flat translucent variant of the glitch; a metric tuned to its shape (long vertical straight edges in a sky region) separated glitch frames (≈1.0) from clean ones (≈0.3) reliably. Inspect frames before trusting a metric.
 2. Run a control with nothing changed to measure how often the glitch appears per run.
 3. Bisect with `DM_NVN_SKIP_FS` (up to 16 fragment shader keys per run) until one draw remains, then `DM_NVN_HILITE` it to see its geometry.
 4. Dump that draw's inputs across frames (`DM_NVN_CBDUMP` + `DM_NVN_CBDUMP_KEY`). If every input is byte-identical between good and bad frames, the difference is on the GPU side: follow the textures it samples (`DM_NVN_TEXINFO`, `DM_NVN_TEXRAW`) to whatever writes them.

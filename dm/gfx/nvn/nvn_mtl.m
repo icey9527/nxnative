@@ -65,6 +65,27 @@ void mtl_queue_forget(uint64_t serial) {
     free(q);
 }
 
+// Preparation uses the legacy map/prewarm path before replay. Program creation
+// keeps its existing synchronous library load: the Metal 4 background cache is
+// not shared with this renderer and cannot safely publish into its shader map.
+void mtl_prepare(void) { mtl_init(); shmap_load(); }
+void mtl_prog_prefetch(const prog_t *p) { (void)p; }
+void mtl_geomesh_stats(uint64_t *draws, uint64_t *waits) { *draws = *waits = 0; }
+void mtl_geohoist_stats(uint64_t *moved, uint64_t *runs, uint64_t *stops) {
+    *moved = *runs = 0; memset(stops, 0, 6 * sizeof *stops);
+}
+// Upstream capture serializes Metal 4 registries, which have a different layout.
+// Reject that optional diagnostic explicitly rather than writing a bogus replay.
+static void legacy_capture_check(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *e = getenv("DM_NVN_CAPTURE");
+        if (e && *e) MLOG("[RED] DM_NVN_CAPTURE requires the Metal 4 renderer; legacy pass/texture diagnostics remain available");
+    });
+}
+void nvn_cap_submit(int n, const uint64_t *handles) { (void)n; (void)handles; legacy_capture_check(); }
+void nvn_cap_present(const tex_t *t, const int crop[4]) { (void)t; (void)crop; legacy_capture_check(); }
+
 void *mtl_device_classic(void) { return mtl_device(); }
 int mtl_framegen_supported(void) { return 0; }
 void mtl_framegen_counts(uint64_t *engine, uint64_t *shown, uint64_t *real) {

@@ -910,13 +910,6 @@ static BOOL pads_slotted(GCController *gone) {
         dispatch_async(dispatch_get_main_queue(), ^{ [self inputDevicesChanged:note]; });
         return;
     }
-    GCController *gone = note.object;
-            gone.extendedGamepad.valueChangedHandler = nil;
-            dm_motion_detach(gone, 0);
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{ [self inputDevicesChanged:nil]; });
-        return;
-    }
     GCController *gone = [note.name isEqual:GCControllerDidDisconnectNotification] ? note.object : nil;
     BOOL controller = g_merge ? pads_merged(gone) : pads_slotted(gone);
     GCKeyboard *keyboard = GCKeyboard.coalescedKeyboard;
