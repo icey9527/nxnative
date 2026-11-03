@@ -92,6 +92,13 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Fix:** [`dm/gfx/hle_nv.c`](../../dm/gfx/hle_nv.c) answers the five `nv::` symbols such a game imports: it records the allocator callbacks (`SetGraphicsAllocator`, `SetGraphicsDevtoolsAllocator`) and the pool from `InitializeGraphics(void*, size_t)`, and `GetGraphicsMemoryInfo` reports that pool (total and free = its size) or zeroes the structure when nothing was initialised. It writes the record of the game's SDK: 0x20 bytes when `DM_SDK_OLD(dm_sdk_major())`, 0x40 otherwise (the boundary the NVN API version and the shared-font layout follow too); the pool figures lie in the first four counters, so both sizes carry them.
 - **Found on:** [Well Dweller](../../dm/games/0100217023F6C000/README.md) (SDK 22.2.0, GameMaker Studio 2, OpenGL through EGL). The game's allocator is never called again, so a zeroed report is equally correct on a GL-only title. The 32-byte overrun on old SDKs was found on Hyrule Warriors: Definitive Edition 1.0.1 (SDK 3.5.1, KTGL, NVN; GitHub issue #708, [PR #709](https://github.com/seedds/nxnative/pull/709)): its startup caller passes a 32-byte record, and AddressSanitizer reported the write past it.
 
+### An SDK 21 Switch 2 game with a 4.5 GB alias region
+
+- **Symptom:** a null pointer in the game's resource code (`main+0x15a69b0`, null + 0x78, thread `BaseProcCreateAndDeleteThread`): a model's load returned null, its status 9, written hundreds of times by a loader thread. The `[mem]` lines end near the top of the alias region.
+- **Cause:** the alias region ran out. An SDK 21 game keeps the SDK's 1 GB node area, as the sdk patches that cut it do not match this SDK, and maps past 4.25 GB of it at the first level.
+- **Fix:** the profile's `mem_alias`: 16 GB ([Splatoon Raiders](../../dm/games/0400380020056000/README.md): `0x400000000`, with `mem_reserve 0x550000000`). The peak then is about +8.5 GB.
+- **Found on:** [Splatoon Raiders](../../dm/games/0400380020056000/README.md). [Fire Emblem Fortune's Weave](../../dm/games/04007EF01F8AE000/README.md) (SDK 22.2.0) takes the same split, and its SDK has its node-area cut (`dm/tools/sdk_patches.py`), from 1 GB to 62 MB, because `alias_room` aborted in `StandardAllocator::Initialize` without one. **Open:** 16 GB is over iOS's reservation limit, so an IPA needs the SDK 21 node-area and alignment cuts first.
+
 ## Virtual address memory and the alias region
 
 ### Virtual address memory follows the NPDM's system resource
@@ -192,6 +199,13 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Windows:** `DM_ALIAS_WINDOWS=<window MB>` (for example `DM_ALIAS_WINDOWS=512`) logs, every 30 s, the mapped memory of each window of that size in the alias region (`hle_svc.c`); it measured Octopath Traveler 0's allocator pools and Super Smash Bros. Ultimate's battle commits.
 - **Log:** the `[mem]` lines report the alias high-water mark (one line per 256 MB), the total actually mapped (page bitmap) and every heap growth.
 
+### An alias high-water mark near the top is not exhaustion
+
+- **Symptom:** the `[mem]` high-water mark climbs close to the end of the alias region while far less is mapped (SUPER ROBOT WARS Y: +4.27 GB of 4.38 GB with 1.82 GB of live regions), and it looks like the address space is about to run out.
+- **Cause:** none to fix: this is how `VammManager::AllocateAddressRegion` places regions. It walks its tree from the highest region down, takes the first hole that fits and places the region at that hole's low end (read on SDK 18.3.5, `sdk+0x13bfd0`; other implementations not read). So while the top has room, every new region lands just past the highest one and freed holes below stay idle, and the mark rises with address churn, not with use. Only when no hole fits does the function return its failure (`w0 = 2` at `sdk+0x13c11c`).
+- **Fix:** none. To judge the room left, read the live regions and their holes in the `DM_REGIONS` table, not the mark, or run with a smaller alias region (`DM_ALIAS_SIZE`): if the game goes on with the end of the table pinned at the top, the holes are serving it. A real exhaustion is what [Size-aligned regions exhaust the alias address space](#size-aligned-regions-exhaust-the-alias-address-space) and [Size-class alignment doubles Unity's regions](#size-class-alignment-doubles-unitys-regions) describe: a request no hole fits.
+- **Found on:** [SUPER ROBOT WARS Y](../../dm/games/010063301BD50000/README.md#memory): every one of 228 regions placed above the top skipped a hole that would have held it, and with the alias region cut to 3 GB the end stayed at +2.99 GB for about 10 minutes of battle demos with no failure.
+
 ## Engine allocators
 
 ### An engine region that exceeds the iOS guest address space
@@ -284,6 +298,13 @@ The guest address space, heaps, pools, virtual address memory and the allocators
   - [SHIN MEGAMI TENSEI V: Vengeance](../../dm/games/010069C01AB82000/README.md) (1.0.3, SDK 15.3.2): the same UE4 layout (`GCreateMalloc` calls the constructor `main+0x1578bc0` at `main+0x1f2f63c`; the vtable `main+0x5a7f0a8`), checked on its main from the archive drive.
   - [Batman: Arkham Knight](../../dm/games/0100ACD0163D0000/README.md) (Unreal Engine 3 with a binned allocator of this kind, 1.0.5, SDK 14.3.0): the static constructors reserve 1 GB for its tables and 37 GB for its pools (`main+0x192eee8`, `main+0x192fe50`; the region check stops the provisional build there). The object is in the bss (`main+0x51818c0`) and its constructor is inlined into the guarded function behind `GMalloc` (`main+0x192eb30`), so the cut is a branch from the guard's acquisition to its release, not a nop; `hle_uemalloc.c` checks for that word. It has no `Binned3` name for the engine-wide rule, so its cut stays its build's (`patches.py`) with a row of fixed addresses. Its FMalloc interface is UE3's: 25 slots with 32-bit sizes and no `TryMalloc` / `TryRealloc` (layout `UE3`: QuantizeSize 3, Malloc 4, Realloc 5, Free 6, GetAllocationSize 20, which stores a 32-bit size), found by the vtable offsets of `GMalloc`'s 36,800 call sites (`+0x20` / `+0x28` / `+0x30` for 8,090 / 8,423 / 20,308 of them). The host heap held 1.75 GB 45 s into the boot.
 - **Note:** Unreal Engine 4.18 (DRAGON QUEST XI S) needs no allocator cut: the SDK's `NumberLineAllocator` hands its region out in 64 KB units (`main+0x177c4d0`), and the engine maps only what it uses.
+
+### Wwise loses the span header in a virtual block from Unreal's heap
+
+- **Symptom:** Wwise crashes in `AK::MemoryMgr::Init` while reallocating or freeing a block, after Unreal switches to the host heap. Whether a boot crashes depends on where the heap puts the block, and the fault address can be a null read or garbage.
+- **Cause:** Wwise requests page-aligned virtual memory through Unreal and locates a span header by clearing the low 16 bits of an interior pointer. A host allocation aligned to only 4 or 16 KiB can put that address before the block. Unreal's virtual allocator supplies 64 KiB alignment for these spans. On an M6 Mac with 16 GB, 10 of 16 boots of Princess Peach: Showtime! crashed this way, and none of 15 with the fix.
+- **Fix:** the host preserves the 64 KiB boundary for allocations and reallocations of at least 64 KiB, and honors larger requested alignments. A reallocation still calls the zone's `realloc` first and copies only a block that comes back off the boundary. Copying every block of that size instead held 1,053 MB of footprint where 289 MB was enough for one array grown to 256 MB by 1.375 times, took 5 times as long, and gave nothing back on a shrink (a synthetic run on a Mac). Aligning the allocations themselves cost little: the footprint of 68 KiB blocks went from 1.182 to 1.185 times the requested size, and at frame 1,500 of a boot with no shader libraries DRAGON QUEST I & II held about 2% more resident memory over four runs each (2,192 to 2,237 MB, overlapping ranges).
+- **Found on:** [Princess Peach: Showtime! 1.0.0 (#996)](https://github.com/seedds/nxnative/issues/996), whose Wwise integration requests 4 KiB alignment.
 
 ### Thread stacks from the host's Unreal heap
 

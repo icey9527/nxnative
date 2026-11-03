@@ -65,6 +65,7 @@ run: $(B)/t_fs_redirect $(B)/t_map_headroom za-timing audio-recovery $(B)/t_lang
 	$(B)/t_audio_stats
 	$(B)/t_fpslock
 	$(B)/t_uecvar
+	$(B)/t_ue_heap_span
 	$(B)/t_audren_work
 	$(B)/t_audren_layout
 	$(B)/t_swkbd
@@ -201,7 +202,7 @@ $(B)/t_nfs_fpslock: t_nfs_fpslock.c ../hle_fpslock.c ../hle_witcher_timing.inc .
 .PHONY: nfs-fpslock
 nfs-fpslock: $(B)/t_nfs_fpslock
 	$(B)/t_nfs_fpslock
-run: nfs-fpslock
+run: nfs-fpslock $(B)/t_ue_heap_span
 $(B)/t_audio_recovery: t_audio_recovery.c ../hle_bigstack.c ../hle_audio.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_audio_recovery.c ../hle_bigstack.c -framework AudioToolbox
 $(B)/t_audio_session_retry: t_audio_session_retry.c ../../ios/Sources/DmAudioRetry.h | $(B)
@@ -210,6 +211,8 @@ $(B)/t_audio_session_retry: t_audio_session_retry.c ../../ios/Sources/DmAudioRet
 audio-recovery: $(B)/t_audio_recovery $(B)/t_audio_session_retry
 	$(B)/t_audio_recovery
 	$(B)/t_audio_session_retry
+$(B)/t_ue_heap_span: t_ue_heap_span.c ../hle_uemalloc.c ../hle.h ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function $(GINC) -o $@ t_ue_heap_span.c
 run: $(B)/t_uecvar
 $(B)/t_uecvar: t_uecvar.c ../hle_uecvar.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wno-unused-function $(GINC) -o $@ t_uecvar.c
@@ -306,11 +309,13 @@ $(B)/t_movie_avc: t_movie_avc.c ../hle_movie.c ../hle_movie_avc.c ../hle_movie_a
 		-framework AudioToolbox -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation
 $(B)/t_movie_vpx: t_movie_vpx.c ../hle_movie.c $(GAME_H) ../gen/vpx/libvpx.a | $(B)
 	$(CLANG) -O1 -g -Wno-unused-function -Wno-tautological-compare $(GINC) -I../../third_party/libvpx -I../../third_party/libvpx/config -I../../third_party/stb_vorbis -Wl,-dead_strip -o $@ t_movie_vpx.c ../gen/vpx/libvpx.a -framework AudioToolbox
-$(B)/t_codec_video: t_codec_video.c ../hle_codec_video.c ../hle_movie.c ../hle_movie_avc.c ../hle_movie_avc.h ../hle_movie_yuv.h $(GAME_H) ../gen/vpx/libvpx.a | $(B)
-	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-tautological-compare -fsanitize=address,undefined $(GINC) -I../../third_party/libvpx -I../../third_party/libvpx/config -I../../third_party/stb_vorbis -o $@ t_codec_video.c ../gen/vpx/libvpx.a \
+$(B)/t_codec_video: t_codec_video.c ../hle_codec_video.c ../hle_movie.c ../hle_movie_avc.c ../hle_movie_avc.h ../hle_movie_av1.c ../hle_movie_av1.h ../hle_movie_yuv.h $(GAME_H) ../gen/vpx/libvpx.a ../gen/dav1d/libdav1d.a | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-tautological-compare -fsanitize=address,undefined $(GINC) -I../../third_party/libvpx -I../../third_party/libvpx/config -I../../third_party/dav1d/include -I../../third_party/stb_vorbis -o $@ t_codec_video.c ../gen/vpx/libvpx.a ../gen/dav1d/libdav1d.a \
 		-framework AudioToolbox -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation
 ../gen/vpx/libvpx.a: FORCE
 	$(MAKE) -C .. GAME=$(GAME) gen/vpx/libvpx.a
+../gen/dav1d/libdav1d.a: FORCE
+	$(MAKE) -C .. GAME=$(GAME) gen/dav1d/libdav1d.a
 .PHONY: FORCE
 FORCE:
 $(B):
