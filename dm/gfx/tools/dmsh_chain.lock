@@ -4,5 +4,5 @@ Ryujinx.Graphics.Shader.dll	49a7a3d152ec3f36
 Ryujinx.Common.dll	04ac3851fc0a40e6
 xlate_source	bff706efc1b71e0e
 spirv-cross	e37945d8e441d34d
-metal_macosx	Apple metal version 32023.922 (metalfe-32023.922.4)
-metal_iphoneos	Apple metal version 32023.922 (metalfe-32023.922.4)
+metal_macosx	Apple metal version 32023.921 (metalfe-32023.921.6)
+metal_iphoneos	Apple metal version 32023.921 (metalfe-32023.921.6)
