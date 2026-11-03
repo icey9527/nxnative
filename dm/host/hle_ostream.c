@@ -10,3 +10,5 @@ HLE_FORCE("_ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE5writeEPKcl",
           "log text: the game's ostream is not materialised on this build; forwarded to the log",
           void *, h_ostream_write, void *self, const char *s, long n) {
     if (s && n > 0) { long k = n > 4000 ? 4000 : n; fprintf(stderr, "[game] %.*s", (int)k, s); }
+    return self;
+}
