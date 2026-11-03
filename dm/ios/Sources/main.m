@@ -308,7 +308,11 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
 @end
 @implementation App
 - (UISceneConfiguration *)application:(UIApplication *)a configurationForConnectingSceneSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
-    BOOL tv = [s.role isEqualToString:UIWindowSceneSessionRoleExternalDisplayNonInteractive];
+    // UIWindowSceneSessionRoleExternalDisplayNonInteractive only exists from iOS 16: on an
+    // earlier system the weak-imported symbol is NULL and taking it dereferences address 0
+    // (SIGSEGV in this method at launch). A 15.x device has no such scene role to match.
+    BOOL tv = NO;
+    if (@available(iOS 16.0, *)) tv = [s.role isEqualToString:UIWindowSceneSessionRoleExternalDisplayNonInteractive];
     UISceneConfiguration *c = [[UISceneConfiguration alloc] initWithName:tv ? @"TV" : @"Default" sessionRole:s.role];
     c.delegateClass = NSClassFromString(tv ? @"DmTVSceneDelegate" : @"SceneDelegate");
     return c;
