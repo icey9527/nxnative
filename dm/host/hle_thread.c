@@ -1076,6 +1076,22 @@ static int svc_thread_impl(int num, uint64_t *regs) {
         else { t->waddr = addr; r = block(t, 3, poll_wait_begin((int64_t)regs[3])); }
         pthread_mutex_unlock(&G);
         if (ok) poll_wait_end((int64_t)regs[3], r);
+        // DM_FUTEX_LOG: what this thread waits on, and whether the condition ever held. The
+        // handler runs hundreds of thousands of times a second, so only the head of the stream
+        // and a periodic summary are printed. Off unless the variable is set: one getenv per run.
+        { static int fl = -1; static unsigned long long fn, fready, fbad, faddr_chg; static uint64_t faddr;
+          if (fl < 0) fl = getenv("DM_FUTEX_LOG") ? 1 : 0;
+          if (fl) {
+              fn++; if (ok) fready++; else fbad++;
+              if (addr != faddr) { faddr = addr; faddr_chg++; }
+              if (fn <= 300)
+                  LOG("[futex] #%llu t=%#x addr=%#llx type=%d want=%d now=%#x timeout=%lld cond_held=%d blocked=%d r=%#llx",
+                      fn, t ? t->handle : 0, (unsigned long long)addr, type, (int)val, (unsigned)v,
+                      (long long)regs[3], ok, ok, (unsigned long long)r);
+              else if (fn % 100000 == 0)
+                  LOG("[futex] summary n=%llu cond_held=%llu cond_failed=%llu addrs=%llu",
+                      fn, fready, fbad, faddr_chg);
+          } }
         regs[0] = (uint64_t)r; return 1;
     }
     case 0x35: {  // SignalToAddress(x0 address, w1 type, w2 value, w3 count): 0 wake, 1 increment if equal and wake, 2 if equal modify the value by waiter count and wake
