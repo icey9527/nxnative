@@ -154,7 +154,7 @@ private struct LauncherView: View {
         .task {
             while !Task.isCancelled {
                 memory = os_proc_available_memory()
-                try? await Task.sleep(for: .seconds(2))
+                try? await Task.sleep(nanoseconds: 2_000_000_000)   // Task.sleep(for:) is iOS 16; 15.6 uses the nanoseconds overload
             }
         }
     }

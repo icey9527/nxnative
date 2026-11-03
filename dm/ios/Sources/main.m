@@ -240,6 +240,8 @@ static int boot_env(void) {
             if (!getenv(k.UTF8String)) { setenv(k.UTF8String, v.UTF8String, 0); [from_file addObject:k]; fprintf(stderr, "boot: env %s=%s (%s)\n", k.UTF8String, v.UTF8String, ef.lastPathComponent.UTF8String); }
         }
     }
+    { extern void dm_thread_dump_start(void); dm_thread_dump_start(); }
+    { extern void dm_pc_sample_start(void); dm_pc_sample_start(); }   // DM_THREAD_DUMP: needs the env files above
     // A portable per-app dump path for diagnostics baked into an IPA. Resolve
     // it inside the app; an external installer need not write its container.
     if (getenv("DM_NVN_SHDUMP") && !strcmp(getenv("DM_NVN_SHDUMP"), "auto")) {

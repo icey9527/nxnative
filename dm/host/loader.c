@@ -621,7 +621,13 @@ static void remap_at(module_t *m, vm_address_t to, const void *from, unsigned lo
     vm_address_t a = to; vm_prot_t cur = 0, max = 0;
     kern_return_t kr = vm_remap(mach_task_self(), &a, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)from, copy, &cur, &max, VM_INHERIT_NONE);
     if (kr != KERN_SUCCESS || a != to) die("%s vm_remap %p -> %#lx (%#lx bytes) failed: %d", m->name, from, (unsigned long)to, size, kr);
-    if ((cur & need) != need) die("%s permissions after vm_remap %#x, missing %#x", m->name, cur, need);
+    if ((cur & need) != need) {
+        // iOS remaps the signed __TEXT read-only (VM_PROT_READ); the source's max protection
+        // allows execute, so ask for it explicitly (iOS 15 has no JIT for the in-place path).
+        kern_return_t kp = vm_protect(mach_task_self(), to, size, FALSE, need);
+        if (kp == KERN_SUCCESS) { LOG("%s remap protection raised to %#x (was %#x)", m->name, need, cur); return; }
+        die("%s permissions after vm_remap %#x, missing %#x (vm_protect: %d)", m->name, cur, need, kp);
+    }
 }
 static void map_image(module_t *m, const char *dir) {
     (void)dir;

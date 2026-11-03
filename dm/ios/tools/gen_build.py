@@ -21,7 +21,7 @@ for toks in lines:
     i = 0
     while i < len(toks):
         t = toks[i]
-        if t == '-framework': fws.append(toks[i + 1]); i += 2; continue
+        if t in ('-framework', '-weak_framework'): fws.append((t, toks[i + 1])); i += 2; continue
         if t.startswith('-I'):
             d = os.path.normpath(os.path.join(host, t[2:]))
             if d not in incs: incs.append(d)
@@ -48,6 +48,7 @@ if renderer not in ('legacy', 'metal4'):
     raise SystemExit('[RED] DM_IOS_RENDERER must be legacy or metal4')
 if renderer == 'metal4':
     defs.append('-DDM_NVN_MODERN_RENDERER=1')
+defs.append('-Werror=unguarded-availability-new')   # every API newer than the minimum OS is a build error, not a launch crash
 print('OTHER_CFLAGS = $(inherited) ' + ' '.join(defs))
-print('IPHONEOS_DEPLOYMENT_TARGET = ' + ('26.0' if renderer == 'metal4' else '16.1'))
-print('DM_FRAMEWORKS = ' + ' '.join(f'-framework {f}' for f in fws if f != 'Cocoa'))
+print('IPHONEOS_DEPLOYMENT_TARGET = ' + ('26.0' if renderer == 'metal4' else os.environ.get('DM_IOS_MIN', '16.1')))
+print('DM_FRAMEWORKS = ' + ' '.join(f'{flag} {name}' for flag, name in fws if name != 'Cocoa'))

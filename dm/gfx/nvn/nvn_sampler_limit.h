@@ -133,7 +133,7 @@ static id<MTLLibrary> sampler_limit_library(NSString *key, id<MTLLibrary> origin
         return nil;
     }
     MTLCompileOptions *options = [MTLCompileOptions new];
-    options.languageVersion = MTLLanguageVersion3_0;
+    options.languageVersion = dm_msl_lang();
     options.preserveInvariance = YES;
     options.fastMathEnabled = NO;
     id<MTLLibrary> library = [g_dev newLibraryWithSource:text options:options error:error];

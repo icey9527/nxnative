@@ -74,7 +74,7 @@ static id<MTLFunction> min_reduction_compile(NvShader *sh) {
             if (!src || !min_reduction_record(record, sh, source, library, src)) {
                 e = [NSError errorWithDomain:@"NVNMinReduction" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Missing or mismatched min-reduction-v1 companion source/manifest"}];
             } else {
-                MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = MTLLanguageVersion3_0;
+                MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = dm_msl_lang();
                 options.preserveInvariance = YES; options.fastMathEnabled = NO;
                 CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
                 sh->min_reduction_lib = [g_dev newLibraryWithSource:src options:options error:&e];

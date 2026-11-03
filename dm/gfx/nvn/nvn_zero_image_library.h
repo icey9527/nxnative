@@ -43,7 +43,7 @@ static id<MTLLibrary> zero_image_library(NSString *key, id<MTLLibrary> original,
         return nil;
     }
     NSString *text = [[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding];
-    MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = MTLLanguageVersion3_0;
+    MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = dm_msl_lang();
     options.preserveInvariance = YES; options.fastMathEnabled = NO;
     id<MTLLibrary> library = [g_dev newLibraryWithSource:text options:options error:error];
     if (library) {

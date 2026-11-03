@@ -698,28 +698,57 @@ int prog_key(const prog_t *p, unsigned st, uint8_t key[8]) {
     memcpy(key, k->key[st], 8);
     return 1;
 }
+// The game may set a program before its code area is written into the pool (Mario does):
+// the key could not be computed at SetShaders, so compute it at the first draw.
+int prog_key_refresh(const prog_t *p, unsigned st) {
+    if (st >= p->nstage) return 0;
+    prog_keys_t *k = pk_get(p, 1);
+    if ((k->ok >> st) & 1) return 1;
+    if (!keys_hash(&p->sd[st], 1, k->key[st])) return 0;
+    k->ok |= (uint8_t)(1u << st);
+    return 1;
+}
+static int shader_stage_index(const NVNshaderData *sd) {   // host stage index: 0 vertex 1 pixel 3 hull 4 domain 5 compute
+    uint32_t ncode = 0, w = 0, magic = 0; void *mb; uint64_t mo;
+    if (!sd->control || !sd->data) return -1;
+    memcpy(&ncode, (const uint8_t *)sd->control + 0x704, 4);
+    if (!ncode || ncode >= (1u << 24) || !mtl_addr(sd->data, 0x34, &mb, &mo)) return -1;   // code not mapped yet
+    memcpy(&magic, (const void *)(uintptr_t)sd->data, 4);
+    if (magic == 0x12345679) return 5;                       // compute
+    memcpy(&w, (const void *)(uintptr_t)sd->data + 0x30, 4); // SPH word 0, as shader_split.sph_stage reads it
+    uint32_t t = (w >> 10) & 0xf;
+    if (t == 0 && (w & 0x1f) == 1) t = 1;                    // Catherine's vertex form
+    switch (t) { case 1: return 0; case 2: return 3; case 3: return 4; case 5: return 1; default: return -1; }
+}
 NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData *sd) {
     prog_t *o = (prog_t *)p;
     if (n < 0 || n > 6) { LOG("[RED] ProgramSetShaders stage count %d", n); return 0; }
-    mtl_prog_release(o); o->nstage = n; memcpy(o->sd, sd, n * sizeof *sd); o->serial = nvn_new_serial();
-    // The keys are computed here (see prog_key in nvn_obj.h): the control section is only guaranteed valid during this call; the code area lives in a memory pool and stays valid while the program is in use
+    mtl_prog_release(o); o->serial = nvn_new_serial();
+    // NVN sets the stages given and keeps the ones already set: engines call this once per
+    // stage (CARTAGRA sets the vertex and the pixel shaders in two calls). The stage comes
+    // from the code header, and the key is stored per stage: the control section is only
+    // valid during this call, and a later call's list position says nothing about this one.
     static int dump = -1; if (dump < 0) dump = getenv("DM_NVN_SHDUMP") != NULL;
     static const char *trace; static int trace_init;
     if (!trace_init) { trace = getenv("DM_NVN_PROGTRACE"); trace_init = 1; }
     prog_keys_t *k = pk_get(p, 1);
-    k->ok = 0;
     for (int i = 0; i < n; i++) {
-        if (keys_hash(&sd[i], 1, k->key[i])) k->ok |= (uint8_t)(1u << i);
+        if (!sd[i].control && !sd[i].data) continue;   // empty slot: this call does not touch that stage
+        int st = shader_stage_index(&sd[i]);
+        if (st < 0) st = i;   // code not mapped yet: keep the list position
+        o->sd[st] = sd[i];
+        if ((uint32_t)st + 1 > o->nstage) o->nstage = (uint32_t)st + 1;
+        if (keys_hash(&sd[i], 1, k->key[st])) k->ok |= (uint8_t)(1u << st);
         // Diagnostic: trace the loader of selected shader keys (comma-separated hex).
-        if (trace && (k->ok & (1u << i))) {
-            char key[17]; for (int j = 0; j < 8; j++) snprintf(key + j * 2, 3, "%02x", k->key[i][j]);
+        if (trace && (k->ok & (1u << st))) {
+            char key[17]; for (int j = 0; j < 8; j++) snprintf(key + j * 2, 3, "%02x", k->key[st][j]);
             if (strstr(trace, key)) {
-                LOG("[nvn] ProgramSetShaders key=%s control=%p code=%#llx", key, sd[i].control, (unsigned long long)sd[i].data);
+                LOG("[nvn] ProgramSetShaders key=%s stage=%d control=%p code=%#llx", key, st, sd[i].control, (unsigned long long)sd[i].data);
                 dm_backtrace((uint64_t)__builtin_frame_address(0));
             }
         }
         // DM_NVN_SHDUMP (debugging): keep a copy of the control section so the replay layer can save shaders missing from the map (never freed)
-        if (dump && sd[i].control) { void *c = malloc(0x880); memcpy(c, sd[i].control, 0x880); o->sd[i].control = c; }
+        if (dump && sd[i].control) { void *c = malloc(0x880); memcpy(c, sd[i].control, 0x880); o->sd[st].control = c; }
     }
     OLOG("ProgramSetShaders %p n=%d data0=%#llx", (void *)p, n, n ? (unsigned long long)sd[0].data : 0ull);
     mtl_prog_prefetch(o);   // its libraries load in the background now, not at its first draw

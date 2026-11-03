@@ -98,6 +98,7 @@ int dm_sdk_nvn2_item(unsigned item, int *out);   // a constant NVN2's own nvnDev
 int dm_main_imports(const char *prefix);   // main imports a symbol whose name starts with prefix (loader.c)
 void *guest_sym(const char *name);
 module_t *module_of(const void *p);
+uint32_t dm_cur_thread_handle(void);
 // Gate dispatch: rewritten svc / timer reads come in through the common entry, ret_addr = the return point of that gate block, regs points to the saved x0..x30
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
 // Observation gates (rewriter OBS tables in the profiles' patches.py, applied by patch_nso.py; numbering matches): callbacks of the saved frame, called on a gate hit once attached

@@ -26,7 +26,7 @@ if [ "${1:-}" != --prepare-xcode ] && [ "${DM_IOS_BUILD_LOCK_OWNER:-}" != "$$" ]
 fi
 t() { echo "[$(date +%T)] $*"; }; die() { t "FAIL: $*"; exit 1; }
 case "${DM_IOS_RENDERER:-legacy}" in
-  legacy) export DM_IOS_DEPLOYMENT_TARGET=16.1 ;;
+  legacy) export DM_IOS_DEPLOYMENT_TARGET=${DM_IOS_MIN:-16.1} ;;
   metal4) export DM_IOS_DEPLOYMENT_TARGET=26.0 ;;
   *) die "DM_IOS_RENDERER must be legacy or metal4" ;;
 esac
@@ -63,7 +63,7 @@ if [ "$PREPARE_XCODE" = YES ]; then
 else DM_SCHEME_NAME=DmIOS; fi
 export DM_SCHEME_NAME
 for f in $MODS; do [ -f "$PATCHED/$f.patched.bin" ] && [ -f "$PATCHED/$f.fixups.tsv" ] || die "no rewritten module $PATCHED/$f (run dm/tools/patch_nso.py first)"; done
-python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"
+[ "${DM_NO_ROMFS_CHECK:-0}" = 1 ] || python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"   # DM_NO_ROMFS_CHECK=1: a DM_COPY_ROMFS=NO build made where the image is not (the app takes Documents/romfs.img)
 V=$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' "$DM/gfx/nvn/dmsh_chain.h")   # the chain version the host is compiled with, one for every game
 # A Vulkan game (Hades): the shaders are the game's SPIR-V, translated by dm/gfx/tools/vk_shaders.py into $MSL_IOS/vk; an OpenGL game (Digimon Story Cyber Sleuth): its GLSL, translated by
 # dm/gfx/tools/gl_shaders.py into $MSL_IOS/gl; neither has NVN chain libraries. GFXAPI=nvn / vulkan / gl says which (the NSP script passes what main imports); without it, the shader

@@ -665,7 +665,13 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    UIWindowScene *ws = self.window.windowScene; if (ws) atomic_store(&g_iface_orient, (int)ws.effectiveGeometry.interfaceOrientation);
+    UIWindowScene *ws = self.window.windowScene;
+    if (ws) {
+        UIInterfaceOrientation o;
+        if (@available(iOS 16.0, *)) o = ws.effectiveGeometry.interfaceOrientation;   // iOS 16
+        else o = ws.interfaceOrientation;                                             // iOS 13-15
+        atomic_store(&g_iface_orient, (int)o);
+    }
     CGFloat u = self.u;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     _controls.frame = self.layer.bounds;

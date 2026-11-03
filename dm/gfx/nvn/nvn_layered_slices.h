@@ -48,7 +48,7 @@ static id<MTLLibrary> layered_slice_library(NSString *key, id<MTLLibrary> origin
         return nil;
     }
     NSString *text = [[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding];
-    MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = MTLLanguageVersion3_0;
+    MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = dm_msl_lang();
     options.preserveInvariance = YES; options.fastMathEnabled = NO;
     id<MTLLibrary> library = [g_dev newLibraryWithSource:text options:options error:error];
     if (library) { *variant = 1; MLOG("Per-slice shader %s: verified instance-layer proof, compatibility buffer 30", key.UTF8String); }

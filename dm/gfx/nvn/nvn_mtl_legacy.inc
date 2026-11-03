@@ -889,9 +889,15 @@ static id<MTLCommandBuffer> q_cb(void) { if (on_sub_thread()) { up_flush(); up_w
 // A bare GPU-hang error only identifies the whole frame; with this option the
 // error carries the label and debug signposts of the encoder that faulted.
 static id<MTLCommandBuffer> replay_cb(void) {
+#if TARGET_OS_OSX || __IPHONE_OS_VERSION_MIN_REQUIRED >= 160000
     MTLCommandBufferDescriptor *d = [MTLCommandBufferDescriptor new];
     d.errorOptions = MTLCommandBufferErrorOptionEncoderExecutionStatus;
     return [g_q commandBufferWithDescriptor:d];
+#else
+    // iOS 15: MTLCommandBufferDescriptor and the encoder-execution-status error option do
+    // not exist; a plain command buffer loses only the per-encoder labels in GPU-hang logs.
+    return [g_q commandBuffer];
+#endif
 }
 static void log_encoder_errors(NSError *error, uint64_t fence) {
     NSArray<id<MTLCommandBufferEncoderInfo>> *infos = error.userInfo[MTLCommandBufferEncoderInfoErrorKey];
@@ -3605,6 +3611,12 @@ static id<MTLLibrary> lib_from_file(NSString *path, NSError **err) {
 static _Atomic int g_depth_zero, g_vs_loaded;
 static NSString *nonpoint_digest(NSData *data);
 static NSDictionary *nonpoint_sources_manifest(void);
+// Runtime MSL compilers in this file and the headers below asked for MSL 3.0, which is
+// iOS 16: the iOS 15 Metal compiler rejects "-std=ios-metal3.0". Use 2.4 there.
+static MTLLanguageVersion dm_msl_lang(void) {
+    if (@available(iOS 16.0, macOS 13.0, *)) return MTLLanguageVersion3_0;
+    return MTLLanguageVersion2_4;
+}
 #include "nvn_layered_slices.h"
 #include "nvn_zero_image_library.h"
 #include "nvn_atomic_image_record.h"
@@ -3620,7 +3632,7 @@ static id<MTLLibrary> bounded_atomic_library(NSString *key, NSError **error) {
         return nil;
     }
     NSString *src = [[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding];
-    MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = MTLLanguageVersion3_0; options.preserveInvariance = YES; options.fastMathEnabled = NO;
+    MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = dm_msl_lang(); options.preserveInvariance = YES; options.fastMathEnabled = NO;
     id<MTLLibrary> library = [g_dev newLibraryWithSource:src options:options error:error];
     if (library) MLOG("Bounded image-atomic variant %s: image-coordinate guards and array-layer addressing enabled", key.UTF8String);
     return library;
@@ -3842,8 +3854,9 @@ static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only
     shmap_load();
     NvProg *o = [NvProg new];
     for (unsigned i = 0; i < p->nstage; i++) {
+        if (!p->sd[i].control) continue;   // stage not set (programs are built one stage at a time)
         // Key = sha256(first 0x880 bytes of the control section + code area): many of Mario's shaders share a control section but differ in code (dm/gfx/tools/shader_split.py). It was computed at SetShaders (hle_nvn.c): by now the game may have freed the control section
-        uint8_t md[8]; prog_key(p, i, md);
+        uint8_t md[8]; prog_key_refresh(p, i); prog_key(p, i, md);
         NSString *k = [NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]];
         NSString *stageName = g_shmap[k];
         if (!stageName) {   // Not in the package: look up the compute kernels embedded in the main body (nvn_builtin.h)
@@ -3865,6 +3878,16 @@ static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only
             if (st >= 0 && st < 6) o->missing[st] = shaderKey;
             MLOG("【红】着色器 %s（%s）加载失败：先跑 dm/gfx/tools/dmsh_build.py 出包", k.UTF8String, stageName.UTF8String);
         }
+    }
+    if (!o->sh[0]) {
+        // Diagnostic: a render program without a vertex stage is drawn as nothing (black screen).
+        NSMutableString *ds = [NSMutableString stringWithFormat:@"nstage=%u", p->nstage];
+        for (unsigned i = 0; i < p->nstage; i++) {
+            uint8_t md[8] = {0}; prog_key(p, i, md);
+            NSString *k = [NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]];
+            [ds appendFormat:@" | %u %@ -> %@ ctl=%p data=%#llx", i, k, g_shmap[k] ?: @"(not in map)", p->sd[i].control, (unsigned long long)p->sd[i].data];
+        }
+        MLOG("【红】程序无顶点阶段：%s", ds.UTF8String);
     }
     if (p->serial) serial_put(p->serial, o);
     return o;
@@ -4350,7 +4373,10 @@ static void udc_note_draw(NvProg *pr) {
 // Every bind used to replace S.prog as a whole, a null program meant "no program bound", and the prepass's ~140 draws per frame were all dropped: depth stayed empty, the G-buffer's depth EQUAL test passed no pixel, and scenes and characters were black.
 // When every stage comes from the same program, that program is the effective one (all of Mario's and Engage's binds are like this, so nothing changes for them); otherwise a composite is made: a host-made prog_t carrying only a serial, whose NvProg in the serial table takes each stage from its source program (a null fragment = a vertex-only pipeline)
 static const prog_t *bind_stages(const prog_t *p, int stages) {
-    for (int st = 0; st < 5; st++) if (stages >> st & 1) S.bst[st] = p;
+    // The mask says which of the program stages to bind, not which stages it replaces:
+    // CARTAGRA binds a vertex-only and a pixel-only program alternately with ALL (31), and
+    // the second must not wipe the first. Only stages the program actually holds are taken.
+    for (int st = 0; st < 5; st++) if ((stages >> st & 1) && (p->sd[st].control || p->sd[st].data)) S.bst[st] = p;
     const prog_t *v = S.bst[0];
     if (!v) return NULL;
     int same = 1; for (int st = 1; st < 5; st++) if (S.bst[st] && S.bst[st] != v) same = 0;
@@ -4517,7 +4543,7 @@ static id<MTLFunction> legacy_dual_function(NvShader *fs) {
             ![record[@"library_sha256"] isEqual:nonpoint_digest(base)]) {
             MLOG("[RED] Dual-source variant %s missing or mismatched", fs->key); return nil;
         }
-        MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = MTLLanguageVersion3_0;
+        MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = dm_msl_lang();
         options.preserveInvariance = YES; options.fastMathEnabled = NO;
         NSError *error = nil;
         id<MTLLibrary> lib = [g_dev newLibraryWithSource:[[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding] options:options error:&error];
@@ -4656,7 +4682,7 @@ static id<MTLFunction> nonpoint_vertex(NvShader *vs, NSError **error) {
             } else {
                 src = [src stringByReplacingOccurrencesOfString:@"[[point_size]]" withString:@"[[user(dm_unused_point_size)]]"];
                 MTLCompileOptions *options = [MTLCompileOptions new];
-                options.languageVersion = MTLLanguageVersion3_0;
+                options.languageVersion = dm_msl_lang();
                 options.preserveInvariance = YES;
                 options.fastMathEnabled = NO; // iOS 16 has no relaxed mathMode; preserve NaN/Inf semantics.
                 CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
@@ -7877,6 +7903,20 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     g_indirect_drv0_buf = sid.drv0; g_indirect_drv0_off = sid.drv0_off; g_indirect_drv0_gpu = sid.drv0_gpu;
     if (sid.drv0 || driver_changed) g_args_dirty[0] = 1;   // also invalidate when returning to a direct draw
     __unsafe_unretained NvProg *pr = prog_get(S.prog);
+    { static int dl = -1; if (dl < 0) dl = getenv("DM_NVN_DRAWLOG") ? 0 : 1 << 20;
+      const tex_t *rt0 = R.rt.n && R.rt.color[0] ? R.rt.color[0] : NULL;
+      static unsigned seen[8][2]; static int nseen;
+      int fresh = 0;
+      if (rt0) { unsigned w = rt0->d.width, h = rt0->d.height; fresh = 1;
+        for (int q = 0; q < nseen; q++) if (seen[q][0] == w && seen[q][1] == h) { fresh = 0; break; }
+        if (fresh && nseen < 8) { seen[nseen][0] = w; seen[nseen][1] = h; nseen++; } else fresh = 0; }
+      if (dl < 12 && fresh) { dl++;
+        int prim_ = dw ? dw->prim : di->prim; long long cnt_ = dw ? (long long)dw->count : (long long)di->count;
+        const tex_t *rt_ = rt0;
+        MLOG("[draw] prim=%d count=%lld vs=%s fs=%s rt=%ux%u fmt=%u vp=%.0f,%.0f %.0fx%.0f", prim_, cnt_,
+             pr && pr->sh[0] ? pr->sh[0]->key : "-", pr && pr->sh[1] ? pr->sh[1]->key : "-",
+             rt_ ? rt_->d.width : 0, rt_ ? rt_->d.height : 0, rt_ ? rt_->d.format : 0,
+             S.has_vp ? S.vp[0][0] : 0, S.has_vp ? S.vp[0][1] : 0, S.has_vp ? S.vp[0][2] : 0, S.has_vp ? S.vp[0][3] : 0); } }
     NSUInteger slices = !g_slice_replaying && !S.rast_discard ? slice_target_count() : 1;
     if (slices > 1) {
         int unsupported = !pr || !pr->sh[0] || (dw && dw->ind) || (di && di->ind) || g_defer.active || g_fz.active;

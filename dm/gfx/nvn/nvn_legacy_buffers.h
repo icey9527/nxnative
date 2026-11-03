@@ -13,7 +13,12 @@ static int g_legacy_direct_arguments = 1;
 static uint64_t g_legacy_next_buffer = UINT64_C(0x10000000000);
 static void legacy_arguments_configure(id<MTLDevice> device) {
     const char *force = getenv("DM_NVN_ARGUMENT_ENCODER");
-    g_legacy_direct_arguments = device.argumentBuffersSupport == MTLArgumentBuffersTier2 && !(force && atoi(force));
+    // MTLTexture.gpuResourceID is Metal 3 (iOS 16, macOS 13); on iOS 15 the selector
+    // does not exist and the direct-address path aborts in tex_by_id. Fall back to the
+    // argument encoder layout (the same path DM_NVN_ARGUMENT_ENCODER=1 forces).
+    int os_has_ids = 0;
+    if (@available(iOS 16.0, macOS 13.0, *)) os_has_ids = 1;
+    g_legacy_direct_arguments = os_has_ids && device.argumentBuffersSupport == MTLArgumentBuffersTier2 && !(force && atoi(force));
 }
 static void legacy_buffer_add(id<MTLBuffer> b) {
     if (!b) return;

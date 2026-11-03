@@ -55,6 +55,7 @@ typedef struct thr {
     pthread_t pt; pthread_cond_t cv;
     // Current wait: kind 0=none 1=lock 2=condition 3=address 4=synchronization object
     int wkind, woke; uint64_t waddr, wkey; uint32_t wtag; int64_t wres;
+    int wtype; int64_t wcmp;   // WaitForAddress (0x34): the arbitration type and the value it compares with (thread state dump)
     _Atomic int sleeping;      // inside SleepThread's timed sleep (not runnable; used by dm_yield_to_core_peers)
     int yield_pending;         // this caller woke a higher-priority thread pinned to its core: hand off before returning to guest code
     _Atomic uint64_t hand_epoch;   // this thread's current handoff: threads it makes runnable belong to it until its next thread SVC returns (svc_thread)
@@ -69,6 +70,7 @@ typedef struct thr {
     int last_svc; uint64_t last_lr;
     int closed;                // Handle closed: the object is freed only when this holds together with exited (Horizon: the thread object goes away with the last reference)
     uint64_t nsvc;             // SVC count (for the state dump)
+    uint32_t svch[256], svch_seen[256];   // SVC number histogram, and the counts at the previous dump (the state dump shows what each thread has been doing since the last one)
     uint64_t nyield, nyield_seen, nbackoff, nbackoff_seen;   // Yields (SleepThread 0/-1/-2) and those the back-off turned into short sleeps, with both counts at the last power report (dm_yield_top)
     uint64_t nspin, nspin_seen, spin_site; const char *spin_mod;   // Spin wait passes (dm_spin_wait; those that yield count in nyield too) and where the last one was
     uint64_t srun_svc, srun_t0, spin_ret;     // Current spin wait: nsvc at its passes, when it began, when the last pass returned
@@ -649,6 +651,12 @@ static void thr_bt(thr_t *t) {
             if (sp > 0x100000000ull && !vm_read_overwrite(mach_task_self(), sp, sizeof stk, (vm_address_t)stk, &g) && g == sizeof stk)
                 for (int r = 0; r < 128; r += 8) fprintf(stderr, "[dm]   %#x stack sp+%#05x: %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx\n", t->handle, r * 8,
                         stk[r], stk[r + 1], stk[r + 2], stk[r + 3], stk[r + 4], stk[r + 5], stk[r + 6], stk[r + 7]); }
+        else if (t->wkind == 0) { uint64_t sp = __darwin_arm_thread_state64_get_sp(st), stk[256]; vm_size_t g = 0;   // pc in a system library (a thread inside an SVC gate): the guest stack still holds the return addresses of the calls that led there, so list the words that point into a module
+            if (sp > 0x100000000ull && !vm_read_overwrite(mach_task_self(), sp, sizeof stk, (vm_address_t)stk, &g) && g == sizeof stk) {
+                char sl[700]; int q = snprintf(sl, sizeof sl, "[dm]   %#x stack (pc outside the guest):", t->handle), n2 = 0;
+                for (int r = 0; r < 256 && n2 < 14 && q < (int)sizeof sl - 40; r++) { module_t *m2 = module_of((void *)stk[r]);
+                    if (m2 && stk[r] - (uint64_t)m2->base < m2->text_end) { q += snprintf(sl + q, sizeof sl - q, " [%d]%s+%#llx", r * 8, m2->name, stk[r] - (uint64_t)m2->base); n2++; } }
+                fprintf(stderr, "%s\n", sl); } }
         char line[1024]; int p = snprintf(line, sizeof line, "[dm]   %#x backtrace:", t->handle), nf = 0;
         for (int k = 0; k < 64 && fp && nf < 20 && p < (int)sizeof line - 40; k++) {
             module_t *m = module_of((void *)lr);
@@ -661,6 +669,7 @@ static void thr_bt(thr_t *t) {
     }
     thread_resume(t->mport);
 }
+uint32_t dm_cur_thread_handle(void) { thr_t *t = cur(); return t ? t->handle : 0; }   // the guest thread running now (observation gates label their lines with it)
 void svc_thread_dump(void) {
     static const char *kinds[] = {"running/not waiting", "mutex", "condvar", "address", "sync object"};
     int nh = 0; for (int i = 1; i < MAX_H; i++) nh += g_h[i].type != O_FREE;
@@ -686,6 +695,10 @@ void svc_thread_dump(void) {
         fprintf(stderr, "[dm] thread %#x '%s' priority %d core %d mask %#llx CPU %.2fs svc %llu %s%s%s waits:%s addr=%#llx%s last svc %#x lr=%s+%#llx\n", t->handle, nm, t->prio, t->core, (unsigned long long)t->mask,
                 cpu, t->nsvc, t->exited ? "exited" : "", t->started ? "" : "not started", life, kinds[t->wkind & 7], t->waddr, own, t->last_svc,
                 m ? m->name : "?", m ? t->last_lr - (uint64_t)m->base : t->last_lr);
+        { uint32_t d[3] = {0, 0, 0}; int idx[3] = {0, 0, 0};   // What this thread has been doing since the previous dump: its three most frequent SVCs (a thread spinning in one SVC, or a busy mix, is told apart here)
+          for (int k = 0; k < 256; k++) { uint32_t dd = t->svch[k] - t->svch_seen[k]; t->svch_seen[k] = t->svch[k];
+              for (int j = 0; j < 3; j++) if (dd > d[j]) { for (int q = 2; q > j; q--) { d[q] = d[q - 1]; idx[q] = idx[q - 1]; } d[j] = dd; idx[j] = k; break; } }
+          if (d[0]) fprintf(stderr, "[dm]   %#x svc since last dump: %#x×%u %#x×%u %#x×%u\n", t->handle, idx[0], d[0], idx[1], d[1], idx[2], d[2]); }
         if (have_raw) { char hx[200]; int q = 0; for (int i = 0; i < 64; i += 4) q += snprintf(hx + q, sizeof hx - q, "%08x ", *(uint32_t *)(raw + i));
                         fprintf(stderr, "[dm]   %#x waited-for object, 64 bytes from %#llx: %s\n", t->handle, t->waddr & ~0xfull, hx); }
         // A thread in an SVC: the guest code that called it, from its stack. Engines built without frame pointers (Batman: Arkham Knight's Unreal Engine 3) leave the frame-pointer backtrace
@@ -905,7 +918,7 @@ int svc_thread(int num, uint64_t *regs) {
     return r;
 }
 static int svc_thread_impl(int num, uint64_t *regs) {
-    { thr_t *me = pthread_getspecific(g_keythr); if (me) { me->last_svc = num; me->last_lr = regs[30]; me->nsvc++; } }
+    { thr_t *me = pthread_getspecific(g_keythr); if (me) { me->last_svc = num; me->last_lr = regs[30]; me->nsvc++; me->svch[num & 255]++; } }
     if (g_flag.thr && num != 0x0B) { thr_t *me = pthread_getspecific(g_keythr); LOG("[%#x] svc %#x x0=%#llx x1=%#llx x2=%#llx x3=%#llx", me ? me->handle : 0, num, regs[0], regs[1], regs[2], regs[3]); }
     switch (num) {
     case 0x08: {  // CreateThread(→w1 handle; x1 entry, x2 argument, x3 stack top, w4 priority, w5 core)
@@ -1083,6 +1096,8 @@ static int svc_thread_impl(int num, uint64_t *regs) {
         }
         if (!r) { int n = 0;
             for (thr_t *w; (cnt <= 0 || n < cnt) && (w = pick(3, addr)); n++) wake(w, 0); }
+        { static int dbg = -1; if (dbg < 0) dbg = getenv("DM_FUTEX_LOG") ? 0 : 1 << 30;
+          if (dbg++ < 200) { uint32_t cv = ld32(addr); LOG("[futex] SIG addr=%#llx type=%d val=%lld cur=%#x cnt=%d r=%#llx", (unsigned long long)addr, type, (long long)val, cv, cnt, (unsigned long long)r); } }
         pthread_mutex_unlock(&G);
         regs[0] = (uint64_t)r; return 1;
     }
@@ -1239,4 +1254,53 @@ void hle_clear_system_event(void *ev) {   // Clear a bound service-layer SystemE
         e->signaled = 0;
     }
     pthread_mutex_unlock(&G);
+}
+#include <unistd.h>
+// DM_THREAD_DUMP=<n>: print every guest thread's wait object and last SVC n times, 3 s apart
+// (diagnostic for a game that runs its frame loop but draws nothing).
+static void *thread_dump_main(void *arg) {
+    int reps = (int)(intptr_t)arg;
+    for (int i = 0; i < reps && i < 20; i++) { sleep(3); svc_thread_dump(); }
+    return NULL;
+}
+void dm_thread_dump_start(void) {   // called by the iOS front end once Documents/env.txt has been applied
+    const char *e = getenv("DM_THREAD_DUMP"); if (!e || !*e) return;
+    int reps = atoi(e); if (reps <= 0) reps = 3;
+    pthread_t th; if (!pthread_create(&th, NULL, thread_dump_main, (void *)(intptr_t)reps)) pthread_detach(th);
+}
+
+// DM_PC_SAMPLE=<ms>: sample the main guest thread's pc every <ms> and log each change as
+// module+offset (diagnostic for "the game does nothing visible" states).
+static void *pc_sample_main(void *arg) {
+    long ms = (long)(intptr_t)arg; char last[160] = ""; int lines = 0;
+    for (int i = 0; i < 6000 && lines < 3000; i++) {
+        usleep((useconds_t)(ms * 1000));
+        thr_t *t = NULL;
+        for (thr_t *q = g_all; q; q = q->all) if (q->handle == 0x1001) { t = q; break; }
+        if (!t || !t->mport) continue;
+        arm_thread_state64_t st; mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
+        if (thread_get_state(t->mport, ARM_THREAD_STATE64, (thread_state_t)&st, &n)) continue;
+        uint64_t pc = __darwin_arm_thread_state64_get_pc(st);
+        module_t *m = module_of((void *)pc);
+        char line[600]; int lp = 0;
+        if (m) lp += snprintf(line + lp, sizeof line - lp, "%s+%#llx", m->name, pc - (uint64_t)m->base);
+        else lp += snprintf(line + lp, sizeof line - lp, "%#llx", (unsigned long long)pc);
+        if (getenv("DM_PC_STACK")) {   // walk the frame-pointer chain for the call path
+            uint64_t fp = __darwin_arm_thread_state64_get_fp(st), lr = __darwin_arm_thread_state64_get_lr(st);
+            for (int k = 0; k < 16 && fp && lp < (int)sizeof line - 40; k++) {
+                module_t *mm = module_of((void *)lr);
+                if (mm) lp += snprintf(line + lp, sizeof line - lp, " <- %s+%#llx", mm->name, lr - (uint64_t)mm->base);
+                uint64_t fr[2]; vm_size_t g = 0;
+                if (vm_read_overwrite(mach_task_self(), fp, 16, (vm_address_t)fr, &g) || g != 16 || fr[0] <= fp) break;
+                fp = fr[0]; lr = fr[1];
+            }
+        }
+        if (strcmp(line, last)) { LOG("[pcs] %s", line); strcpy(last, line); lines++; }
+    }
+    return NULL;
+}
+void dm_pc_sample_start(void) {
+    const char *e = getenv("DM_PC_SAMPLE"); if (!e || !*e) return;
+    long ms = atol(e); if (ms < 1) ms = 20;
+    pthread_t th; if (!pthread_create(&th, NULL, pc_sample_main, (void *)(intptr_t)ms)) pthread_detach(th);
 }

@@ -30,6 +30,12 @@ targets:
         # holes writable, so restore maxprot=rwx before Xcode signs the app.
         script: python3 "${SRCROOT}/tools/set_text_maxprot.py" "${TARGET_BUILD_DIR}/${EXECUTABLE_PATH}"
         basedOnDependencyAnalysis: false
+      - name: Weak-link frameworks newer than the minimum OS
+        # MetalFX (iOS 16) is imported by the host and autolinked as a required
+        # LC_LOAD_DYLIB; on iOS 15 dyld then aborts before main. The code tests
+        # the feature at run time, so make the load command weak.
+        script: python3 "${SRCROOT}/tools/weak_framework.py" "${TARGET_BUILD_DIR}/${EXECUTABLE_PATH}" MetalFX
+        basedOnDependencyAnalysis: false
       - name: Copy game resources
         script: /bin/bash "${SRCROOT}/tools/stage_resources.sh"
         basedOnDependencyAnalysis: false   # rsync checks the game's files; no huge Xcode input/output lists
