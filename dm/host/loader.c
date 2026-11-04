@@ -10,6 +10,8 @@
 #include <limits.h>
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
+#include <mach/mach.h>       // vm_allocate / mach_task_self for the JIT layout below (the iOS SDK does not pull this in)
+#include <mach/vm_map.h>
 #include "hle.h"
 #include "loader_image.h"
 
