@@ -88,6 +88,7 @@ targets:
       CURRENT_PROJECT_VERSION: ${DM_APP_VERSION}
       DEVELOPMENT_TEAM: ${DM_TEAM_ID}
       CODE_SIGN_STYLE: Automatic
+      SWIFT_OBJC_BRIDGING_HEADER: Sources/DmIOS-Bridging-Header.h   # CloudSaves.h, DmGameMenu.h …
       ENABLE_USER_SCRIPT_SANDBOXING: NO    # the game's files live on the external drive
       DM_COPY_GAME_RESOURCES: YES          # build_ipa.sh overrides this only for its unsigned archive build
       SYMROOT: $(DM_XCODE_OUTPUT_ROOT)/Build/Products
@@ -102,7 +103,6 @@ targets:
       OTHER_CFLAGS: $(inherited) -mcpu=apple-a10  # Keep the shipped binary on the pre-LSE baseline; newer devices run it unchanged.
       CLANG_ENABLE_OBJC_ARC: YES
       SWIFT_VERSION: "5.0"                         # Launcher.swift (SwiftUI)
-      SWIFT_OBJC_BRIDGING_HEADER: Sources/DmIOS-Bridging-Header.h   # CloudSaves.h (the cloud-save folder pick)
       DEBUG_INFORMATION_FORMAT: dwarf
       GCC_WARN_INHIBIT_ALL_WARNINGS: YES
 schemes:

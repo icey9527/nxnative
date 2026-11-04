@@ -9,15 +9,9 @@ import os
 
 private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
 
-private extension View {
-    @ViewBuilder func launcherMargins() -> some View {
-        if #available(iOS 17.0, *) { contentMargins(.horizontal, 12, for: .scrollContent) }
-        else { padding(.horizontal, 12) }
-    }
-}
 
-/// 云存档: an iCloud Drive folder shared with the Mac app (chosen in its settings window's
-/// 云存档 too). The host brings the save in from there when the game starts and
+/// Cloud saves: an iCloud Drive folder shared with the Mac app (chosen in its settings window's
+/// Cloud saves too). The host brings the save in from there when the game starts and
 /// sends it there after each save (dm/host/save_sync.h); the folder is a bookmark (CloudSaves.m).
 private struct CloudSavesSection: View {
     @State private var folder: String = ""
@@ -27,32 +21,32 @@ private struct CloudSavesSection: View {
     var body: some View {
         Section {
             HStack {
-                Text("云存档")
+                Text("Cloud saves")
                 Spacer()
-                Text(folder.isEmpty ? "关闭" : (folder as NSString).lastPathComponent)
+                Text(folder.isEmpty ? "Off" : (folder as NSString).lastPathComponent)
                     .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
-            Button(folder.isEmpty ? "选择 iCloud 云盘文件夹…" : "选择其他文件夹…") { picking = true }
+            Button(folder.isEmpty ? "Choose a folder in iCloud Drive…" : "Choose a different folder…") { picking = true }
                 // The sheet sits on the button, not on the Section: SwiftUI hands a Section's modifiers to every row, so one tap presented a picker per row and they invalidated each other (LNPANDY/NX2Apple#315).
                 .sheet(isPresented: $picking) {
                     DocumentPicker(types: [.folder]) { url in
                         picking = false
                         if dm_store_cloud_saves(url) {
-                            note = "已保存。开始游戏后将使用此文件夹。"
+                            note = "Saved. The game uses this folder when you press Play."
                             refresh()
                         } else {
-                            note = "无法保存此文件夹，请选择其他文件夹。"
+                            note = "That folder could not be remembered — try a different one."
                         }
                     } onCancel: { picking = false }
                 }
             if !folder.isEmpty {
-                Button("关闭云存档", role: .destructive) {
+                Button("Turn off cloud saves", role: .destructive) {
                     dm_clear_cloud_saves(); refresh(); note = ""
                 }
             }
         } footer: {
             Text(note.isEmpty
-                 ? "请选择 iCloud 云盘文件夹，并在 Mac 端选择同一文件夹。游戏启动时读取云存档，保存后同步；被替换的存档保留在 save-backups 中。"
+                 ? "Choose a folder in iCloud Drive, and the same one in the Mac app's Cloud saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups."
                  : note)
         }
         .onAppear(perform: refresh)
@@ -62,7 +56,7 @@ private struct CloudSavesSection: View {
         var stale: ObjCBool = false
         folder = dm_cloud_saves_path(&stale) ?? ""
         if stale.boolValue && folder.isEmpty {
-            note = "之前选择的文件夹已无法读取（应用签名已改变），请重新选择。"
+            note = "The folder you chose before is no longer readable (the app was signed differently). Please choose it again."
         }
     }
 }
@@ -112,9 +106,9 @@ private struct LauncherView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 22))
                             .accessibilityHidden(true)
                     }
-                    Text((info("CFBundleDisplayName") as? String) ?? LauncherText.display("Game"))
+                    Text((info("CFBundleDisplayName") as? String) ?? "Game")
                         .font(.title.weight(.bold)).multilineTextAlignment(.center)
-                    Text("\(LauncherText.display("Version")) \((info("CFBundleShortVersionString") as? String) ?? "")")
+                    Text("Version \((info("CFBundleShortVersionString") as? String) ?? "")")
                         .font(.callout).foregroundStyle(.secondary)
                     playButton
                 }
@@ -124,43 +118,42 @@ private struct LauncherView: View {
                     ForEach(m.sections, id: \.self) { section in
                         let rows = m.rows(in: section)
                         if !rows.isEmpty {
-                            Section(LauncherText.display(section)) {
+                            Section(section) {
                                 ForEach(rows) { SettingRow(s: $0, m: m) }
                             }
                         }
                     }
                     Section {
-                        Button(LauncherText.display("Reset to tested defaults")) { m.reset() }
+                        Button("Reset to tested defaults") { m.reset() }
                             .disabled(!m.changed)
                     } footer: {
-                        Text(LauncherText.display("Brings back all settings this game was tested with."))
+                        Text("Brings back all settings this game was tested with.")
                     }
                     CloudSavesSection()
                     Section {
                         HStack {
-                            Text(LauncherText.display("Memory available"))
+                            Text("Memory available")
                             Spacer()
                             Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                         }
                     }
                 }
                 .listStyle(.insetGrouped)
-                .launcherMargins()
+                .contentMargins(.horizontal, 12, for: .scrollContent)
                 .frame(width: geometry.size.width * 2 / 3)
             }
         }
         .preferredColorScheme(.dark)
-        .environment(\.locale, Locale(identifier: "zh_Hans_CN"))
         .task {
             while !Task.isCancelled {
                 memory = os_proc_available_memory()
-                try? await Task.sleep(nanoseconds: 2_000_000_000)   // Task.sleep(for:) is iOS 16; 15.6 uses the nanoseconds overload
+                try? await Task.sleep(for: .seconds(2))
             }
         }
     }
 
     @ViewBuilder var playButton: some View {
-        let button = Button(action: play) { Text(LauncherText.display("Play")).font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large)
+        let button = Button(action: play) { Text("Play").font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large)
         if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
     }
 

@@ -148,6 +148,7 @@ void mtl_sm_stats(uint64_t *passes, uint64_t *continued, uint64_t *waited) { *pa
 void mtl_cshoist_stats(uint64_t *moved, uint64_t *depth, uint64_t *stops) { *moved = *depth = 0; memset(stops, 0, 8 * sizeof *stops); }
 void mtl_hybrid_stats(uint64_t *draws, uint64_t *made, uint64_t *none) { *draws = *made = *none = 0; }
 void mtl_fb_stats(uint64_t *snaps, uint64_t *reused, uint64_t *tile, uint64_t *wait) { *snaps = *reused = *tile = *wait = 0; }   // same-pass feedback counts: Metal 4 only
+void dm_gfx_restop(void) {}   // residency reset (DM_CTL restop): the legacy renderer keeps no residency set
 void mtl_pso_line(char *out, size_t size) { if (size) snprintf(out, size, "legacy renderer (Metal 4 pipeline archive unavailable)"); }
 void mtl_ab_gpu(uint64_t frame, double gpu_ms, double frame_ms) { (void)frame; (void)gpu_ms; (void)frame_ms; }
 int mtl_link_tick(uint64_t n, double *target, double *lead_ms, int *ticks, double *gap_ms) {
