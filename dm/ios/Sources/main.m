@@ -243,7 +243,12 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
 @end
 @implementation App
 - (UISceneConfiguration *)application:(UIApplication *)a configurationForConnectingSceneSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
-    return [[UISceneConfiguration alloc] initWithName:[s.role isEqualToString:UIWindowSceneSessionRoleExternalDisplayNonInteractive] ? @"TV" : @"Default" sessionRole:s.role];   // a TV (front_ios.m DmTVSceneDelegate)
+    // UIWindowSceneSessionRoleExternalDisplayNonInteractive exists from iOS 16 only. On an older
+    // system the weak import is NULL and taking it dereferences address 0, which crashes here at
+    // launch, before any of the game runs. A 15.x device has no such scene role to match.
+    BOOL tv = NO;
+    if (@available(iOS 16.0, *)) tv = [s.role isEqualToString:UIWindowSceneSessionRoleExternalDisplayNonInteractive];
+    return [[UISceneConfiguration alloc] initWithName:tv ? @"TV" : @"Default" sessionRole:s.role];   // a TV (front_ios.m DmTVSceneDelegate)
 }
 @end
 
