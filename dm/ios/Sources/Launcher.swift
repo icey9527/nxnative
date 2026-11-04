@@ -139,7 +139,7 @@ private struct LauncherView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
-                .contentMargins(.horizontal, 12, for: .scrollContent)
+                .dmContentMargins()
                 .frame(width: geometry.size.width * 2 / 3)
             }
         }
@@ -147,7 +147,7 @@ private struct LauncherView: View {
         .task {
             while !Task.isCancelled {
                 memory = os_proc_available_memory()
-                try? await Task.sleep(for: .seconds(2))
+                try? await Task.sleep(nanoseconds: 2_000_000_000)   // Task.sleep(for:) is iOS 16
             }
         }
     }
@@ -189,4 +189,13 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     parent.present(h, animated: false)
     fputs("launcher: \(file.settings.count) settings shown\n", stderr)
     return true
+}
+
+// contentMargins(_:_:for:) is iOS 17: the horizontal inset the settings list wants is applied
+// only there, and the list is laid out as before below it.
+extension View {
+    @ViewBuilder func dmContentMargins() -> some View {
+        if #available(iOS 17.0, *) { self.contentMargins(.horizontal, 12, for: .scrollContent) }
+        else { self }
+    }
 }
