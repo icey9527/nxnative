@@ -9,5 +9,5 @@ METALLIB = ['xcrun', '-sdk', 'iphoneos', 'metallib']
 RECORD = ' '.join(METAL) + '; ' + ' '.join(METALLIB)                                # Written into json chain.metal
 
 def compile(msl, air, lib):
-    subprocess.run([*METAL, msl, '-o', air], check=True)
+    dmsh_pch.compile(METAL, msl, air)
     subprocess.run([*METALLIB, air, '-o', lib], check=True)

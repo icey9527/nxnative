@@ -65,7 +65,7 @@ nros = [ln.split('\t')[0] for ln in open(tab) if ln.strip() and not ln.startswit
 if nros:
     if ns: sys.exit('namespaced NRO embedding needs a per-game NRO table and is not implemented')
     at, rows = [0, 0, 0], []
-    for i, sect in enumerate(('__TEXT,__dm_nro_x0', '__DM_NRO_W,__img', '__TEXT,__dm_nro_x1')):
+    for i, sect in enumerate((f'__TEXT,__dm{tag}_nro_x0', f'__DM{tag}_NRO_W,__img', f'__TEXT,__dm{tag}_nro_x1')):
         asm.append(f'    .section {sect}')
         for k, n in enumerate(nros):
             bin_, sz, parts = pieces(n); lo, hi = parts[i]
@@ -73,11 +73,13 @@ if nros:
             if i == 0: rows.append([n])
             rows[k] += [at[i], hi - lo]; at[i] += hi - lo
             place(asm, bin_, sz, lo, hi)
-    asm += ['    .section __DATA,__dm_nro_tab', '    .p2align 3']
+    asm += [f'    .section __DATA,__dm{tag}_nro_tab', '    .p2align 3']
     for r in rows:
         assert len(r[0]) < 32
         asm.append(f'    .ascii "{r[0]}"'); asm.append(f'    .space {32 - len(r[0])}')
         asm.append('    .quad ' + ', '.join(f'{v:#x}' for v in r[1:]))
-    flags.append('-Wl,-segprot,__DM_NRO_W,rw,rw')
+    flags.append(f'-Wl,-segprot,__DM{tag}_NRO_W,rw,rw')
+if jit:
+    asm.append(f'    .section __TEXT,__dm{tag}_jit'); place(asm, jit, os.path.getsize(jit), 0, r16(os.path.getsize(jit)))
 open(dst, 'w').write('\n'.join(asm) + '\n')
 print(' '.join(flags))
