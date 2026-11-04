@@ -149,6 +149,13 @@ void mtl_cshoist_stats(uint64_t *moved, uint64_t *depth, uint64_t *stops) { *mov
 void mtl_hybrid_stats(uint64_t *draws, uint64_t *made, uint64_t *none) { *draws = *made = *none = 0; }
 void mtl_fb_stats(uint64_t *snaps, uint64_t *reused, uint64_t *tile, uint64_t *wait) { *snaps = *reused = *tile = *wait = 0; }   // same-pass feedback counts: Metal 4 only
 void dm_gfx_restop(void) {}   // residency reset (DM_CTL restop): the legacy renderer keeps no residency set
+// Entry points the shared NVN layer (hle_nvn.c) and hle_hid.c call that only exist on the
+// Metal 4 side. The compatibility renderer keeps no pool-content tracking, no probe ramp and
+// no queued bindings to forget, so these answer "nothing to do".
+void mtl_pool_gpu_written(const void *pool) { (void)pool; }
+int  mtl_probe_ramp_on(void) { return 0; }
+void mtl_prog_forget(const prog_t *p) { (void)p; }
+__attribute__((weak)) int front_screen_max_fps(void) { return 0; }   // front_mac.m defines the real one
 void mtl_pso_line(char *out, size_t size) { if (size) snprintf(out, size, "legacy renderer (Metal 4 pipeline archive unavailable)"); }
 void mtl_ab_gpu(uint64_t frame, double gpu_ms, double frame_ms) { (void)frame; (void)gpu_ms; (void)frame_ms; }
 int mtl_link_tick(uint64_t n, double *target, double *lead_ms, int *ticks, double *gap_ms) {
