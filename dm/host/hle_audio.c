@@ -52,6 +52,33 @@ typedef struct {
 static aout *g_aos[AOMAX];
 static pthread_mutex_t g_aos_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_suspended;
+
+// Platform-neutral CTL notification. A Mac host or a test has no UIKit observer; the iOS
+// frontend registers a static callback and dispatches onto its main queue. (This branch's
+// front_ios.m calls dm_audio_env_callback_set and dm_audio_diagnostics; upstream keeps no
+// such entry points, so they live here.)
+static _Atomic(void (*)(const char *, const char *)) g_audio_env_callback;
+void dm_audio_env_callback_set(void (*fn)(const char *, const char *)) {
+    atomic_store_explicit(&g_audio_env_callback, fn, memory_order_release);
+}
+void dm_audio_env_changed(const char *key, const char *value) {
+    if (!key || strcmp(key, "DM_AUDIO_SESSION_CATEGORY")) return;
+    void (*fn)(const char *, const char *) = atomic_load_explicit(&g_audio_env_callback, memory_order_acquire);
+    if (fn) fn(key, value);
+}
+// The iOS frontend asks for this when the audio session changes (interruption, route change):
+// one line per open output, so the log shows what the game still holds.
+void dm_audio_diagnostics(const char *why) {
+    pthread_mutex_lock(&g_aos_lock);
+    for (int i = 0; i < AOMAX; i++) {
+        aout *a = g_aos[i]; if (!a) continue;
+        LOG("audio #%d (%s): state=%d backend=%d au=%s callbacks=%llu queued=%u suspended=%d",
+            a->id, why ? why : "requested", atomic_load(&a->state), a->backend, a->au ? "ready" : "missing",
+            (unsigned long long)atomic_load(&a->cb_n),
+            (unsigned)atomic_load(&a->q_tail) - (unsigned)atomic_load(&a->q_head), g_suspended);
+    }
+    pthread_mutex_unlock(&g_aos_lock);
+}
 static aout *ao(const void *g) { aout *a = objmap_get(g); if (!a) die("AudioOut %p was not created by the host", g); return a; }
 // the call site as "module+offset"; "host" when the host itself calls (in-process audio renderer)
 static const char *site(void *lr, char *buf, size_t n) {
