@@ -182,9 +182,11 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
 - (instancetype)initWithFrame:(CGRect)f {
     if ((self = [super initWithFrame:f])) {
         _layout = dm_layout(self.bounds, UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);   // until the front end arranges it
-        [self registerForTraitChanges:@[UITraitDisplayScale.class] withHandler:^(id<UITraitEnvironment> environment, UITraitCollection *previous) {
-            [(UIView *)environment setNeedsLayout];
-        }];
+        if (@available(iOS 17.0, *)) {   // registerForTraitChanges is iOS 17
+            [self registerForTraitChanges:@[UITraitDisplayScale.class] withHandler:^(id<UITraitEnvironment> environment, UITraitCollection *previous) {
+                [(UIView *)environment setNeedsLayout];
+            }];
+        }
         self.multipleTouchEnabled = YES; self.opaque = NO; self.backgroundColor = UIColor.clearColor;
         const char *feedback = getenv("DM_TOUCH_HAPTICS");
         if (!feedback || atoi(feedback)) {
@@ -510,7 +512,13 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    UIWindowScene *ws = self.window.windowScene; if (ws) atomic_store(&g_iface_orient, (int)ws.effectiveGeometry.interfaceOrientation);
+    UIWindowScene *ws = self.window.windowScene; if (ws) {
+        if (@available(iOS 17.0, *)) {   // UIWindowScene.effectiveGeometry is iOS 17
+            atomic_store(&g_iface_orient, (int)ws.effectiveGeometry.interfaceOrientation);
+        } else {
+            atomic_store(&g_iface_orient, (int)ws.interfaceOrientation);   // deprecated on 16, present on 15
+        }
+    }
     CGFloat u = self.u;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     CGFloat scale = MAX(self.traitCollection.displayScale, 1);

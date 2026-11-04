@@ -39,9 +39,11 @@ static UILabel *front_ios_fps_label(void);
 + (Class)layerClass { return CAMetalLayer.class; }
 - (instancetype)initWithFrame:(CGRect)f {
     if ((self = [super initWithFrame:f])) {
-        [self registerForTraitChanges:@[UITraitDisplayScale.class] withHandler:^(id<UITraitEnvironment> environment, UITraitCollection *previous) {
-            [(UIView *)environment setNeedsLayout];
-        }];
+        if (@available(iOS 17.0, *)) {   // registerForTraitChanges is iOS 17
+            [self registerForTraitChanges:@[UITraitDisplayScale.class] withHandler:^(id<UITraitEnvironment> environment, UITraitCollection *previous) {
+                [(UIView *)environment setNeedsLayout];
+            }];
+        }
         CAMetalLayer *l = (CAMetalLayer *)self.layer;
         l.device = MTLCreateSystemDefaultDevice(); l.pixelFormat = MTLPixelFormatBGRA8Unorm;
         l.contentsScale = MAX(self.traitCollection.displayScale, 1); l.framebufferOnly = NO; l.opaque = YES;
@@ -153,7 +155,9 @@ static void launcher_done(void) { [g_root startGame]; }
     self.fill = dm_picture_fill(getenv("DM_PICTURE_FIT"));
     if (self.fill) LOG("front end: picture Fill (DM_PICTURE_FIT=fill), the 16:9 picture covers the screen in landscape and its edges are cropped");
     self.view.clipsToBounds = YES;   // with Fill the game view is larger than the screen
-    self.view.window.traitOverrides.preferredContentSizeCategory = UIContentSizeCategorySmall;   // UIKit draws the in-game menu (GameMenu.swift) in this window: it keeps one compact text size over the game, whatever the system's text size
+    if (@available(iOS 17.0, *)) {   // traitOverrides is iOS 17: on 15.x messaging it raises NSInvalidArgumentException and the app aborts
+        self.view.window.traitOverrides.preferredContentSizeCategory = UIContentSizeCategorySmall;   // UIKit draws the in-game menu (GameMenu.swift) in this window: it keeps one compact text size over the game, whatever the system's text size
+    }   // UIKit draws the in-game menu (GameMenu.swift) in this window: it keeps one compact text size over the game, whatever the system's text size
     self.game = [[DmGameView alloc] initWithFrame:self.view.bounds];
     [self.view addSubview:self.game];
     g_layer = (CAMetalLayer *)self.game.layer;
