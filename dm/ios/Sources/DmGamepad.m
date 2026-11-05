@@ -1,7 +1,7 @@
 // Virtual gamepad (Nintendo button positions) + physical controllers (GameController), handed to the host through dm_input_set and dm_pad_set_player (hle_hid.c, bit layout in dm_input.h).
-//   Two layouts, three in handheld mode, picked in the in-game menu (GameMenu.swift) that the menu button at the top centre (a gear) opens; the choice is kept in NSUserDefaults (each game is its own app, so per game); the first launch uses the game profile's pad_layout (DM_GAME_PAD_LAYOUT).
-//   The menu button stays while a physical controller is connected, so the menu is there in every layout and with every controller.
-//   Tap (touch): no control but the menu button, every other touch goes to the game's local touch viewport; offered only while the game is in handheld mode, the only one in which it reads the touch screen (Balatro, played by touch).
+//   Two layouts, three in handheld mode; one tap on the layout button at the top centre (labelled with the current layout, "2D" / "3D" / "Tap") goes to the next, and the choice is kept in NSUserDefaults (each game is its own app, so per game); the first launch uses the game profile's pad_layout (DM_GAME_PAD_LAYOUT).
+//   The layout button stays while a physical controller is connected, so the layout is reachable with every controller.
+//   Tap (touch): no control but the layout button, every other touch goes to the game's local touch viewport; offered only while the game is in handheld mode, the only one in which it reads the touch screen (Balatro, played by touch).
 //   2D (simple): top corners ZL above L (one column), ZR above R likewise, teardrops with the tip toward the screen corner; − and + side by side at the top centre; the left stick in the bottom-left corner (fixed ring, tilt measured from the ring centre, small dead zone);
 //     the A (right) B (bottom) X (top) Y (left) diamond in the bottom-right corner, sliding a finger between keys switches keys. Each bottom corner holds a single control, so it sits close in (reaching halfway into the side safe-area inset).
 //   3D (full, Pro Controller style): everything in 2D (left stick and diamond keep their place and size), plus a D-pad (inward of and below the left stick, 8-way), a right stick that is not drawn
@@ -136,8 +136,8 @@ int dm_opmode(void);   // hle_oe.c: 0 = handheld
 - (void)arrange:(DmLayout)layout;
 - (BOOL)menuTakes:(CGPoint)p;
 @end
-// The menu button: a UIButton whose menu is the in-game menu (UIKit draws it and takes the touches while it is open). Its hit circle is larger than the drawn one, and a key nearer
-// to the touch wins (− / + sit beside it), so it asks the pad
+// The layout button: a UIButton labelled with the current layout, one tap going to the next. Its hit circle is larger than the drawn one, and a key nearer to the touch wins
+// (− / + sit beside it), so it asks the pad
 @interface DmMenuButton : UIButton
 @end
 @implementation DmMenuButton
@@ -217,10 +217,9 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         _menu = [DmMenuButton buttonWithType:UIButtonTypeCustom];
         _menu.backgroundColor = k_idle; _menu.layer.borderColor = k_line.CGColor; _menu.layer.borderWidth = 1.5;
         _menu.layer.shadowColor = UIColor.blackColor.CGColor; _menu.layer.shadowOpacity = 0.2; _menu.layer.shadowRadius = 3; _menu.layer.shadowOffset = CGSizeMake(0, 1);
-        _menu.tintColor = k_text; _menu.accessibilityLabel = @"Menu";
-        _menu.menu = CFBridgingRelease(dm_game_menu()); _menu.showsMenuAsPrimaryAction = YES;
-        __weak DmGamepad *weakSelf = self;
-        [_menu addAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; [weakSelf reset]; }] forControlEvents:UIControlEventMenuActionTriggered];   // the menu opens: release every key and touch first
+        _menu.tintColor = k_text; _menu.accessibilityLabel = @"Controller layout";
+        _menu.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold]; [_menu setTitleColor:k_text forState:UIControlStateNormal];
+        [_menu addTarget:self action:@selector(nextLayout) forControlEvents:UIControlEventTouchUpInside];   // one tap: the next layout (2D → 3D → Tap → 2D), as before the gear
         [self addSubview:_menu];
         _menu.hidden = _padHidden; _controls.hidden = _padHidden;
         NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
@@ -242,7 +241,15 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (int b = 0; b < B_N; b++) _key[b].hidden = _padHidden || _tap || (fullOnly(b) && !_full);
     _ring.hidden = _knob.hidden = _padHidden || _tap;
+    [_menu setTitle:(_tap ? @"Tap" : _full ? @"3D" : @"2D") forState:UIControlStateNormal];
     [CATransaction commit];
+}
+- (void)nextLayout {   // 2D → 3D (→ Tap in handheld mode) → 2D: release every touch first (no key stays held), save, lay out again
+    int l = _tap ? 0 : _full ? (dm_opmode() == 0 ? 2 : 0) : 1;
+    [self reset];
+    _full = l == 1; _tap = l == 2;
+    [NSUserDefaults.standardUserDefaults setObject:@(l) forKey:k_layout_key];
+    [self applyLayout]; [self setNeedsLayout];
 }
 - (int)padLayout { return _tap ? 2 : _full ? 1 : 0; }
 - (void)setPadLayout:(int)l {   // the in-game menu's pick: release every touch first (no key stays held), save, lay out again

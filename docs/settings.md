@@ -239,7 +239,9 @@ iCloud Drive takes a moment to carry a file from one device to the other. Quit t
 
 ## In-game menu
 
-On the iPhone and iPad the gear at the top centre of the touch controls opens a menu while the game runs; it stays when a controller hides the other controls. It holds **Console mode**, **Picture** and the **Frame-rate counter**, then **Controller layout** (**2D**, **3D**, and **Tap**, no controls and every touch to the game, in handheld mode), **Touch feedback** and **Game rumble**: the settings that take effect at once. A choice opens to show its options, the current one ticked. The menu's text keeps one size whatever the system text size, so it stays short over the game. A change is remembered as on the settings screen, which shows it at the next start; a setting `Documents/env.txt` fixes is shown, not changed. The other settings need the game to start again, so they are only on the settings screen: close the app fully and open it again.
+This build keeps the layout button at the top centre of the touch controls, as before the in-game menu: it shows the current layout and one tap goes to the next, **2D** → **3D** → **Tap** (no controls and every touch to the game, in handheld mode) → **2D**, remembered as the settings screen remembers a choice. It stays when a controller hides the other controls. **`DM_PAD=0`** in `Documents/env.txt` draws no touch control at all, the layout button included.
+
+The settings that used to take effect at once from that menu — **Console mode**, **Picture**, the **Frame-rate counter**, **Touch feedback** and **Game rumble** — are on the settings screen; with `DM_LAUNCHER=0` they can be set in `Documents/env.txt` instead. The other settings need the game to start again: close the app fully and open it again.
 
 Console mode changes as on a Switch put in or taken out of its dock. While a TV shows the game it stays **Docked**, and the mode you pick applies when the TV is disconnected. **Docked** removes the Tap layout, as a docked Switch reads no touch screen.
 
