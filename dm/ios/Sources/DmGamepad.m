@@ -154,7 +154,8 @@ static void pads_start(void);   // Physical controllers, below
     NSMapTable<UITouch *, NSNumber *> *_faceOf;    // which keys each touch on the diamond currently holds
     CAShapeLayer *_key[B_N]; CATextLayer *_label[B_N];   // one layer per key
     CAShapeLayer *_ring, *_knob;                   // the left stick (the right one is not drawn)
-    DmMenuButton *_menu;                           // opens the in-game menu (GameMenu.swift)
+    CAShapeLayer *_swap; CATextLayer *_swapLabel;  // the layout button: a circle with the current layout's name, as before the gear
+    DmMenuButton *_menu;                           // takes the touches over that circle (it draws nothing itself)
     UIImpactFeedbackGenerator *_touchFeedback;       // one short feedback per touch-control press edge
     unsigned _hapticSticks;
     BOOL _stickShown;                              // the left stick was held at the last refresh
@@ -214,12 +215,10 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
             _key[b] = shape(_controls);
             if (names[b]) _label[b] = label(_key[b], names[b]);   // the D-pad arms carry no label
         }
-        _menu = [DmMenuButton buttonWithType:UIButtonTypeCustom];
-        _menu.backgroundColor = k_idle; _menu.layer.borderColor = k_line.CGColor; _menu.layer.borderWidth = 1.5;
-        _menu.layer.shadowColor = UIColor.blackColor.CGColor; _menu.layer.shadowOpacity = 0.2; _menu.layer.shadowRadius = 3; _menu.layer.shadowOffset = CGSizeMake(0, 1);
-        _menu.tintColor = k_text; _menu.accessibilityLabel = @"Controller layout";
-        _menu.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold]; [_menu setTitleColor:k_text forState:UIControlStateNormal];
-        [_menu addTarget:self action:@selector(nextLayout) forControlEvents:UIControlEventTouchUpInside];   // one tap: the next layout (2D → 3D → Tap → 2D), as before the gear
+        _swap = shape(_controls); _swapLabel = label(_swap, @"");   // the layout button: drawn with the other controls, exactly as before the gear
+        _menu = [DmMenuButton buttonWithType:UIButtonTypeCustom];   // takes the touches over that circle; it draws nothing itself
+        _menu.backgroundColor = UIColor.clearColor; _menu.accessibilityLabel = @"Controller layout";
+        [_menu addTarget:self action:@selector(nextLayout) forControlEvents:UIControlEventTouchUpInside];   // one tap: the next layout (2D → 3D → Tap → 2D)
         [self addSubview:_menu];
         _menu.hidden = _padHidden; _controls.hidden = _padHidden;
         NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
@@ -241,7 +240,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (int b = 0; b < B_N; b++) _key[b].hidden = _padHidden || _tap || (fullOnly(b) && !_full);
     _ring.hidden = _knob.hidden = _padHidden || _tap;
-    [_menu setTitle:(_tap ? @"Tap" : _full ? @"3D" : @"2D") forState:UIControlStateNormal];
+    _swapLabel.string = _tap ? @"Tap" : _full ? @"3D" : @"2D"; _swap.hidden = _padHidden;
     [CATransaction commit];
 }
 - (void)nextLayout {   // 2D → 3D (→ Tap in handheld mode) → 2D: release every touch first (no key stays held), save, lay out again
@@ -553,9 +552,8 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     static const struct { int b; CGFloat angle; } arms[] = {{B_UP, 0}, {B_RIGHT, M_PI_2}, {B_DOWN, M_PI}, {B_LEFT, -M_PI_2}};   // the same arm in 90° steps
     for (int i = 0; i < 4; i++) setPath(_key[arms[i].b], armPath(self.dpadCenter, self.dpadR, K_ARM_W * u, K_ARM_IN * u, arms[i].angle, 6 * u));
     CGFloat mr = K_MENU_R * u; CGPoint mc = self.menuCenter;
-    _menu.frame = CGRectMake(mc.x - mr, mc.y - mr, 2 * mr, 2 * mr); _menu.layer.cornerRadius = mr;
-    _menu.layer.shadowPath = [UIBezierPath bezierPathWithOvalInRect:_menu.bounds].CGPath;
-    [_menu setImage:[UIImage systemImageNamed:@"gearshape.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:13 * u weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+    _menu.frame = CGRectMake(mc.x - mr, mc.y - mr, 2 * mr, 2 * mr);   // the touch target over the drawn circle
+    setPath(_swap, circlePath(mc, mr)); placeLabel(_swapLabel, mc, 12 * u);
     setPath(_ring, circlePath(self.stickHome, [self stickR:0]));
     CGFloat k = K_KNOB_R * u; _knob.bounds = CGRectMake(0, 0, 2 * k, 2 * k);
     setPath(_knob, circlePath(CGPointMake(k, k), k));
@@ -645,7 +643,7 @@ static BOOL pads_slotted(GCController *gone) {
     GCController *c = note.object, *gone = [note.name isEqual:GCControllerDidDisconnectNotification] ? c : nil;
     if (c && (!c.extendedGamepad || g_merge)) LOG("controller %s: %s%s", gone ? "disconnected" : "connected", pad_name(c), c.extendedGamepad ? "" : " (no extended gamepad profile: not used)");
     BOOL any = g_merge ? pads_merged(gone) : pads_slotted(gone);
-    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any || self->_padHidden; [self reset]; });   // the touch gamepad hides while any controller is in use
+    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any || self->_padHidden; self->_menu.hidden = any || self->_padHidden; [self reset]; });   // the touch gamepad (layout button included) hides while any controller is in use
 }
 @end
 
