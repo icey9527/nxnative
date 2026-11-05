@@ -150,9 +150,10 @@ void mtl_hybrid_stats(uint64_t *draws, uint64_t *made, uint64_t *none) { *draws 
 void mtl_fb_stats(uint64_t *snaps, uint64_t *reused, uint64_t *tile, uint64_t *wait) { *snaps = *reused = *tile = *wait = 0; }   // same-pass feedback counts: Metal 4 only
 void dm_gfx_restop(void) {}   // residency reset (DM_CTL restop): the legacy renderer keeps no residency set
 // Entry points the shared NVN layer (hle_nvn.c) and hle_hid.c call that only exist on the
-// Metal 4 side. The compatibility renderer keeps no pool-content tracking, no probe ramp and
-// no queued bindings to forget, so these answer "nothing to do".
+// Metal 4 side. The compatibility renderer keeps no pool-content tracking or sparse-tile table,
+// no probe ramp and no queued bindings to forget, so these answer "nothing to do".
 void mtl_pool_gpu_written(const void *pool) { (void)pool; }
+void mtl_sp_phys_gone(const void *mem, uint64_t size) { (void)mem; (void)size; }
 int  mtl_probe_ramp_on(void) { return 0; }
 void mtl_prog_forget(const prog_t *p) { (void)p; }
 __attribute__((weak)) int front_screen_max_fps(void) { return 0; }   // front_mac.m defines the real one
