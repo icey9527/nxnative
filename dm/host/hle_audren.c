@@ -128,7 +128,10 @@ static void render_main(void *arg) {
     ar_t *a = arg; t_ar = a;
     void (*exec)(void *, void *) = gsym("_ZN2nn5audio29ExecuteAudioRendererRenderingENS0_19AudioRendererHandleE");
     void *out = dm_pcmout_open(2);
-    static int16_t data[NBUF][FRAME_MAX * 2]; static gbuf bufs[NBUF]; gbuf *free_list[NBUF]; int nfree = NBUF;
+    // Per render thread: the queue hands these blocks to the device, which copies them on its own callback, so a block still waiting to play must not be
+    // written by another renderer's thread. They were function-level statics until 2026-11-05, shared by every renderer: one renderer's BGM overwrote
+    // another renderer's voice before it played (truncated voice and clicks, missing sound effects), and a block of BGM came out silent
+    static __thread int16_t data[NBUF][FRAME_MAX * 2]; static __thread gbuf bufs[NBUF]; gbuf *free_list[NBUF]; int nfree = NBUF;
     for (int i = 0; i < NBUF; i++) { bufs[i] = (gbuf){data[i], sizeof data[i], 0}; free_list[i] = &bufs[i]; }
     dm_pcmout_start(out);
     LOG("audren: render thread %d started (%d buffers in flight, paced by the output)", ar_index(a), NBUF);
