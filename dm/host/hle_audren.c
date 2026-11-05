@@ -101,7 +101,6 @@ typedef struct {
     int16_t cq[CQ][FRAME_MAX * 2]; int cq_n[CQ]; _Atomic uint32_t cq_head, cq_tail;   // output queue of catch-up frames
     pthread_mutex_t cq_mu; pthread_cond_t cq_cv;   // the render thread signals each frame it takes off the queue (catch-up pacing)
     int sink_logged;
-    int was_loud, snd_early, snd_late;   // a sound starts: its command list is logged twice early and twice after 10 s, to compare a good one with a truncated one
     int32_t up_buf[2 * (15 + FRAME_MAX)]; uint32_t up_pos;   // up_3_2's last samples and position
 } ar_t;
 static ar_t g_ar[AR_MAX];
@@ -435,23 +434,6 @@ static int capture(ar_t *a, const uint8_t *cl, size_t len, int16_t *dst) {
                 dst[s] = (int16_t)v; loud |= (uint64_t)v;
             }
             atomic_fetch_add(&a->frames, 1); if (loud) atomic_fetch_add(&a->nonsilent, 1); if (clamped) atomic_fetch_add(&a->clipped, clamped);
-            if (loud && !a->was_loud && (a->snd_early < 2 || (a->frames > 2000 && a->snd_late < 2))) {   // a sound starts: what the list carries, now and after the first ten seconds
-                int *cnt = a->snd_early < 2 ? &a->snd_early : &a->snd_late; (*cnt)++;
-                char line[2048]; size_t o = 0; const uint8_t *q = cl + 0x20;
-                for (uint32_t i = 0; i < ncmd; i++) {
-                    int sz = cmd_size(q);
-                    if (cmd_on(q) && sz >= 0x18) {
-                        uint64_t b0 = 0, b1 = 0; memcpy(&b0, q + 8, 8); memcpy(&b1, q + 16, 8);
-                        int w = snprintf(line + o, sizeof line - o, " %d/%d/%llx,%llx", cmd_id(q), sz,
-                                         (unsigned long long)b0, (unsigned long long)b1);
-                        if (w < 0 || (size_t)w >= sizeof line - o) { line[o] = 0; break; }
-                        o += (size_t)w;
-                    }
-                    q += sz;
-                }
-                LOG("audren: renderer %d sound start at frame %llu, enabled commands id/size/body0,body1:%s", ar_index(a), (unsigned long long)a->frames, line);
-            }
-            a->was_loud = (int)loud;
             uint64_t f = atomic_load(&a->frames); if (f == 200 || f % 12000 == 0) LOG("audren: renderer %d rendered %llu frames, %llu of them not silent, %llu samples saturated", ar_index(a), (unsigned long long)f, (unsigned long long)atomic_load(&a->nonsilent), (unsigned long long)atomic_load(&a->clipped));
             return (int)nout;
         }
