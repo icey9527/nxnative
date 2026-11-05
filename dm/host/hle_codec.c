@@ -210,6 +210,7 @@ HLE_FORCE("_ZN2nn5codec29InitializeHardwareOpusDecoderEPNS0_23HardwareOpusDecode
     int r = init(d->soft, rate, ch, d->work, ws);
     if (r) { free(d->work); free(d->soft); free(d); return r; }
     d->m = m; d->ch = ch;
+    { static int ninited; if (ninited++ < 8) LOG("codec: manager Opus decoder %p created (%d Hz, %d ch)", gd, rate, ch); }
     opus_trace_record("dec_init_enter", gd, m, d, 0, 0, NULL, 0);
     pthread_mutex_lock(&m->lock);
     if (m->ndec == m->cap) { m->cap *= 2; opus_dec **dec = realloc(m->dec, (size_t)m->cap * sizeof *m->dec); if (!dec) die("Opus manager realloc"); m->dec = dec; }
@@ -282,7 +283,10 @@ HLE_FORCE("_ZN2nn5codec36EnqueueOpusDataToHardwareOpusDecoderEPNS0_23HardwareOpu
     opus_req *r = malloc(sizeof *r + (in_size > OPUS_MAX_PCM ? in_size : OPUS_MAX_PCM)); if (!r) die("Opus request malloc");
     r->next = NULL; r->n = in_size; r->samples = 0; memcpy(r->data, in, in_size);
     pthread_mutex_lock(&m->lock);
-    if (m->io_used >= m->io_total) { pthread_mutex_unlock(&m->lock); free(r); return 0x3a6f; }   // no free I/O buffer: the game checks the count first (main+0xad2ec4)
+    if (m->io_used >= m->io_total) {   // no free I/O buffer: the game checks the count first (main+0xad2ec4)
+        static int nred; if (nred++ < 8) LOG("[RED] codec: Opus enqueue refused, %d of %d I/O buffers in use (a decoder that never dequeues would stop every sound)", m->io_used, m->io_total);
+        pthread_mutex_unlock(&m->lock); free(r); return 0x3a6f;
+    }
     m->io_used++; d->nwait++;
     if (d->wait_tail) d->wait_tail->next = r; else d->wait = r;
     d->wait_tail = r;

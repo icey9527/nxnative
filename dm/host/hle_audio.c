@@ -565,10 +565,15 @@ HLE_FORCE("_ZN2nn5audio28GetAudioOutBufferDataPointerEPKNS0_14AudioOutBufferE", 
 HLE_FORCE("_ZN2nn5audio25GetAudioOutBufferDataSizeEPKNS0_14AudioOutBufferE", "buffer data size", uint64_t, h_au_BufSize, const gbuf *b) { return b->size; }
 HLE_FORCE("_ZN2nn5audio20AppendAudioOutBufferEPNS0_8AudioOutEPNS0_14AudioOutBufferE", "append a buffer to play", unsigned, h_au_Append, void *g, gbuf *b) {
     aout *a = ao(g);
-    // Diagnostic switch DM_AUDIO_DUMP=<file>: every PCM block the game appends is written out as is (16-bit, 48 kHz, channel count per the OpenAudioOut log, usually 6). Used to judge "did a given sound play or not":
-    // cross-correlate the original game's audio against it (this is how the tier-one drop sound was verified). The file is opened only when the variable is set; when unset this costs only one extra cached check
-    { static FILE *df; static int on = -1; if (on < 0) { const char *e = getenv("DM_AUDIO_DUMP"); on = e != NULL; if (on && !(df = fopen(e, "wb"))) LOG("[RED] DM_AUDIO_DUMP cannot open %s", e); }
-      if (df && b && b->ptr && b->size) fwrite(b->ptr, 1, (size_t)b->size, df); }
+    // Diagnostic switch DM_AUDIO_DUMP=<file>: every PCM block the game appends is written out as is (16-bit, 48 kHz, channel count per the OpenAudioOut log, usually 6).
+    // One file per output, <file>.<id>: with two outputs writing one file, every block boundary looked like a discontinuity that the output does not have
+    { static FILE *df[8]; static char path[8][512]; static const char *base; static int on = -1;
+      if (on < 0) { base = getenv("DM_AUDIO_DUMP"); on = base != NULL; }
+      if (on && a->id >= 0 && a->id < 8 && b && b->ptr && b->size) {
+        if (!df[a->id] && snprintf(path[a->id], sizeof path[a->id], "%s.%d", base, a->id) > 0 && !(df[a->id] = fopen(path[a->id], "wb")))
+            LOG("[RED] DM_AUDIO_DUMP cannot open %s", path[a->id]);
+        if (df[a->id]) fwrite(b->ptr, 1, (size_t)b->size, df[a->id]);
+      } }
     pthread_mutex_lock(&a->m);
     uint32_t qt = atomic_load_explicit(&a->q_tail, memory_order_relaxed);
     uint32_t qh = atomic_load_explicit(&a->q_head, memory_order_acquire);
