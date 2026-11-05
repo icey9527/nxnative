@@ -122,6 +122,44 @@ typedef struct opus_req { struct opus_req *next; size_t n; int samples; uint8_t 
 typedef struct opus_mgr opus_mgr;
 typedef struct { opus_mgr *m; void *soft; void *work; int ch; opus_req *wait, *wait_tail, *done, *done_tail; int nwait, ndone; } opus_dec;
 struct opus_mgr { pthread_mutex_t lock; void *event; int io_total, io_used, ndec, cap; opus_dec **dec; };
+
+typedef struct { uint64_t seq, tid; const char *event; uintptr_t guest, m, d, dec; int ndec, cap, has_state; } opus_trace_entry;
+enum { OPUS_TRACE_N = 32 };
+static pthread_mutex_t g_opus_trace_lock = PTHREAD_MUTEX_INITIALIZER;
+static opus_trace_entry g_opus_trace[OPUS_TRACE_N];
+static uint64_t g_opus_trace_seq;
+static unsigned g_opus_trace_dumps;
+static void opus_trace_record(const char *event, const void *guest, const opus_mgr *m, const opus_dec *d,
+                              int ndec, int cap, const void *dec, int has_state) {
+    pthread_mutex_lock(&g_opus_trace_lock);
+    uint64_t seq = ++g_opus_trace_seq;
+    g_opus_trace[(seq - 1) % OPUS_TRACE_N] = (opus_trace_entry){seq, (uint64_t)(uintptr_t)pthread_self(), event,
+        (uintptr_t)guest, (uintptr_t)m, (uintptr_t)d, (uintptr_t)dec, ndec, cap, has_state};
+    pthread_mutex_unlock(&g_opus_trace_lock);
+}
+static void opus_trace_dump(const char *reason) {
+    opus_trace_entry entries[OPUS_TRACE_N]; uint64_t first, last; int print;
+    pthread_mutex_lock(&g_opus_trace_lock);
+    last = g_opus_trace_seq; first = last > OPUS_TRACE_N ? last - OPUS_TRACE_N + 1 : 1;
+    for (uint64_t n = first; n <= last; n++) entries[(n - first)] = g_opus_trace[(n - 1) % OPUS_TRACE_N];
+    print = g_opus_trace_dumps++ < 2;
+    pthread_mutex_unlock(&g_opus_trace_lock);
+    if (print) {
+        LOG("[RED] codec: Opus manager invariant failed (%s); preceding lifecycle trace", reason);
+        for (uint64_t n = first; n <= last; n++) {
+            const opus_trace_entry *e = &entries[n - first];
+            if (e->seq != n) continue;
+            if (e->has_state) LOG("codec: Opus trace seq=%llu event=%s tid=%llx guest=%#llx m=%#llx d=%#llx dec=%#llx ndec=%d cap=%d",
+                                  (unsigned long long)e->seq, e->event, (unsigned long long)e->tid,
+                                  (unsigned long long)e->guest, (unsigned long long)e->m, (unsigned long long)e->d,
+                                  (unsigned long long)e->dec, e->ndec, e->cap);
+            else LOG("codec: Opus trace seq=%llu event=%s tid=%llx guest=%#llx m=%#llx d=%#llx",
+                     (unsigned long long)e->seq, e->event, (unsigned long long)e->tid,
+                     (unsigned long long)e->guest, (unsigned long long)e->m, (unsigned long long)e->d);
+        }
+    }
+}
+static int opus_mgr_bad(const opus_mgr *m) { return m->ndec < 0 || m->ndec > m->cap || (m->ndec && !m->dec); }
 static opus_mgr *opus_mgr_of(const void *gm) { opus_mgr *m = *(opus_mgr *const *)gm; if (!m) die("Opus decoder manager %p was not initialized by the host", gm); return m; }
 static opus_dec *opus_dec_of(const void *gd) { opus_dec *d = objmap_get(gd); if (!d) die("Opus decoder %p was not initialized by the host", gd); return d; }
 static void opus_free_list(opus_req *r) { while (r) { opus_req *n = r->next; free(r); r = n; } }
@@ -139,12 +177,16 @@ HLE_FORCE("_ZN2nn5codec36InitializeHardwareOpusDecoderManagerEPNS0_30HardwareOpu
     if (!(m->dec = calloc((size_t)m->cap, sizeof *m->dec))) die("Opus manager calloc");
     hle_bind_system_event(event, 1);   // the SDK creates it; the game destroys it after FinalizeHardwareOpusDecoderManager (main+0xad27c4)
     *(opus_mgr **)gm = m;
+    opus_trace_record("mgr_init", gm, m, NULL, m->ndec, m->cap, m->dec, 1);
     return 0;
 }
 HLE_FORCE("_ZN2nn5codec34FinalizeHardwareOpusDecoderManagerEPNS0_30HardwareOpusDecoderManagerTypeE", "hwopus service; host manager state", void, h_codec_HwOpusMgrFini, void *gm) {
     opus_mgr *m = *(opus_mgr **)gm; if (!m) return;
+    opus_trace_record("mgr_fini_enter", gm, m, NULL, 0, 0, NULL, 0);
     for (int i = 0; i < m->ndec; i++) if (m->dec[i]) m->dec[i]->m = NULL;
-    *(opus_mgr **)gm = NULL; pthread_mutex_destroy(&m->lock); free(m->dec); free(m);
+    *(opus_mgr **)gm = NULL; pthread_mutex_destroy(&m->lock);
+    opus_trace_record("mgr_fini_release", gm, m, NULL, 0, 0, NULL, 0);
+    free(m->dec); free(m);
 }
 HLE_FORCE("_ZN2nn5codec46GetHardwareOpusDecoderManagerFreeIoBufferCountEPKNS0_30HardwareOpusDecoderManagerTypeE", "hwopus service; host manager state", int, h_codec_HwOpusMgrFreeIo, const void *gm) {
     opus_mgr *m = opus_mgr_of(gm); pthread_mutex_lock(&m->lock); int n = m->io_total - m->io_used; pthread_mutex_unlock(&m->lock); return n;
@@ -161,11 +203,14 @@ HLE_FORCE("_ZN2nn5codec29InitializeHardwareOpusDecoderEPNS0_23HardwareOpusDecode
     int r = init(d->soft, rate, ch, d->work, ws);
     if (r) { free(d->work); free(d->soft); free(d); return r; }
     d->m = m; d->ch = ch;
+    opus_trace_record("dec_init_enter", gd, m, d, 0, 0, NULL, 0);
     pthread_mutex_lock(&m->lock);
     if (m->ndec == m->cap) { m->cap *= 2; opus_dec **dec = realloc(m->dec, (size_t)m->cap * sizeof *m->dec); if (!dec) die("Opus manager realloc"); m->dec = dec; }
     m->dec[m->ndec++] = d;
+    opus_trace_record("dec_init_append", gd, m, d, m->ndec, m->cap, m->dec, 1);
     pthread_mutex_unlock(&m->lock);
     objmap_put(gd, d);
+    opus_trace_record("dec_init_map", gd, m, d, 0, 0, NULL, 0);
     return 0;
 }
 static void opus_dec_clear(opus_dec *d) {   // under the manager's lock: every request of the decoder dropped, its I/O buffers back to the pool
@@ -175,16 +220,26 @@ static void opus_dec_clear(opus_dec *d) {   // under the manager's lock: every r
 }
 // FinalizeHardwareOpusDecoder and ResetHardwareOpusDecoder are the hooks above (the older C interface): both find this decoder through objmap first
 static int opus_mgr_dec_fini(void *gd) {
-    opus_dec *d = objmap_get(gd); if (!d || !d->work) return 0;   // the older interface's state has no work buffer of its own
-    objmap_del(gd);
+    opus_dec *d = objmap_get(gd);
+    if (!d || !d->work) return 0;   // the older interface's state has no work buffer of its own
+    opus_trace_record("dec_fini_lookup", gd, NULL, d, 0, 0, NULL, 0);
+    void *removed = objmap_del(gd);
+    opus_trace_record(removed == d ? "dec_fini_unmap" : "dec_fini_unmap_miss", gd, NULL, d, 0, 0, NULL, 0);
     void (*fini)(void *) = opus_fn("_ZN2nn5codec19FinalizeOpusDecoderEPNS0_15OpusDecoderTypeE");
     opus_mgr *m = d->m;
+    opus_trace_record("dec_fini_manager", gd, m, d, 0, 0, NULL, 0);
     if (m) {
-        pthread_mutex_lock(&m->lock); opus_dec_clear(d);
+        pthread_mutex_lock(&m->lock);
+        opus_trace_record("dec_fini_locked", gd, m, d, m->ndec, m->cap, m->dec, 1);
+        if (opus_mgr_bad(m)) opus_trace_dump("decoder fini");
+        opus_dec_clear(d);
         for (int i = 0; i < m->ndec; i++) if (m->dec[i] == d) { m->dec[i] = m->dec[--m->ndec]; break; }
+        opus_trace_record("dec_fini_removed", gd, m, d, m->ndec, m->cap, m->dec, 1);
         pthread_mutex_unlock(&m->lock);
     } else opus_dec_clear(d);
-    fini(d->soft); free(d->soft); free(d->work); free(d);
+    fini(d->soft);
+    opus_trace_record("dec_fini_release", gd, NULL, d, 0, 0, NULL, 0);
+    free(d->soft); free(d->work); free(d);
     return 1;
 }
 static int opus_mgr_dec_reset(void *gd) {
