@@ -266,6 +266,7 @@ DM_OODLE_JOB	path	`=<job file>`: the host runs the game's own Oodle decoder on e
 DM_OODLE_MODULES	path	The rewritten modules the Mac host's Oodle tool mode loads when `shader_split.py` decodes Trinity packs; set by the NSP script
 DM_OODLE_SERVE	switch	`=1`: the host answers decode requests on stdin / stdout with the game's own Oodle (or LZ5) decoder from the guest main thread before the SDK starts, until stdin ends
 DM_OPMODE	player	The operation mode the game sees: `0` handheld, `1` console (default: the profile's `op_mode`, console unless set); read once at startup
+DM_PAD	switch	`0` draws no touch control at all: every key, the sticks and the menu button at the top centre stay hidden, while the game's own touch screen keeps working (the transparent touch view stays); unset or `1` shows the touch controller in the chosen layout
 DM_PAD_FORCE_FULL	player	`1` always shows the complete iOS touch-controller overlay, including every D-pad, face, shoulder, stick and utility control
 DM_PAD_KEEP_TOUCH	player	`1` keeps the complete touch controller visible and usable while a physical controller, keyboard or pointer is connected
 DM_PAD_MERGE	switch	`=1` on the Mac merges every controller into player 1, as before, instead of giving each controller a player of its own
