@@ -10,7 +10,7 @@ host, gen = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
 # GAME comes from the environment). The compile command is then the iOS one: its -I names the iOS shader header
 renderer = os.environ.get('DM_IOS_RENDERER', 'legacy')
 if renderer not in ('legacy', 'metal4'): sys.exit('DM_IOS_RENDERER must be legacy or metal4')
-minimum = '16.1' if renderer == 'legacy' else '26.0'
+minimum = os.environ.get('DM_IOS_DEPLOYMENT_TARGET', os.environ.get('DM_IOS_MIN', '16.1')) if renderer == 'legacy' else '26.0'
 subprocess.run(['make', '-s', '-C', host, 'game_profile', 'host_msl', 'MSL_SDK=iphoneos', 'MSL_MIN_iphoneos=' + minimum], check=True)
 cmd = subprocess.run(['make', '-s', '-n', '-B', '-C', host, 'dmhost', 'MSL_SDK=iphoneos', 'MSL_MIN_iphoneos=' + minimum], capture_output=True, text=True, check=True).stdout
 # The host's own link command (-o dmhost) first, then the per-file compile commands of the libraries it depends on (libvpx): header paths keep this order, so the host's headers are found first
