@@ -16,7 +16,7 @@ enum { AU_IDLE, AU_STARTING, AU_CANCELED, AU_WAIT_CALLBACK };
 typedef struct { void *ptr; uint64_t cap, size; } gbuf;     // The first 24 bytes written into the guest AudioOutBuffer
 #define QMAX 64
 #define RELMAX QMAX                    // Released max = number of in-flight buffers (the game must take a buffer back before it can append again), same limit as pending
-typedef struct { uint64_t calls, count, qsum, underruns, zero_bytes; uint32_t fmin, fmax; } audio_stats;
+typedef struct { uint64_t calls, count, qsum, underruns, zero_bytes, appended, released; uint32_t fmin, fmax; } audio_stats;
 typedef struct {
     pthread_mutex_t m;
     void *event;                       // Guest SystemEvent: signaled whenever a buffer is released
@@ -38,6 +38,7 @@ typedef struct {
     int id;                            // open sequence number (#N in the log; tells simultaneous outputs apart, e.g. Engage's Wwise and Unity's built-in FMOD)
     int nlog;                          // Start / Stop / Close lines logged so far (at most 32 per output)
     _Atomic uint64_t under_n, under_b; // underruns: times the pending queue was empty when the callback needed data / zero-filled bytes
+    _Atomic uint64_t appended, released;   // blocks the game handed over / blocks the output finished playing: a gap that grows means the game's pool is losing buffers
     uint64_t st_calls, st_count, st_qsum, st_u0, st_ub0; uint32_t st_fmin, st_fmax;   // callback-owned accumulators
     audio_stats st_report; _Atomic int st_pending; // one snapshot, consumed by the watchdog or Close under g_aos_lock
     _Atomic uint64_t cb_n;             // device callbacks of this output (the watchdog's evidence that the device still plays it)
@@ -137,6 +138,7 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
             if (rw - rr == RELMAX) die("AudioOut released queue overflow");
             a->rel[rw & (RELMAX - 1)] = b;
             atomic_store_explicit(&a->rel_tail, rw + 1, memory_order_release);
+            atomic_fetch_add_explicit(&a->released, 1, memory_order_relaxed);
             qh++;
             atomic_store_explicit(&a->q_head, qh, memory_order_release);
             a->pos = 0; released = 1;
@@ -191,7 +193,9 @@ static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioT
         a->st_count++;
         if (++a->st_calls % 2000 == 0 && !atomic_load_explicit(&a->st_pending, memory_order_acquire)) {
             uint64_t un = atomic_load(&a->under_n), ubb = atomic_load(&a->under_b);
-            a->st_report = (audio_stats){a->st_calls, a->st_count, a->st_qsum, un - a->st_u0, ubb - a->st_ub0, a->st_fmin, a->st_fmax};
+            a->st_report = (audio_stats){a->st_calls, a->st_count, a->st_qsum, un - a->st_u0, ubb - a->st_ub0,
+                                          atomic_load_explicit(&a->appended, memory_order_relaxed),
+                                          atomic_load_explicit(&a->released, memory_order_relaxed), a->st_fmin, a->st_fmax};
             atomic_store_explicit(&a->st_pending, 1, memory_order_release);
             a->st_fmin = ~0u; a->st_fmax = 0; a->st_qsum = a->st_count = 0; a->st_u0 = un; a->st_ub0 = ubb;
         } }
@@ -368,9 +372,11 @@ static int stats_take(aout *a, audio_report *r) {
 }
 static void stats_log(const audio_report *r) {
     const audio_stats *s = &r->stats;
-    LOG("audio #%d device callbacks %llu: %u–%u frames each, %.1f blocks queued on average at callback; in these %llu, %llu underruns, %.1f ms zero-padded", r->id,
+    LOG("audio #%d device callbacks %llu: %u–%u frames each, %.1f blocks queued on average at callback; in these %llu, %llu underruns, %.1f ms zero-padded; %llu blocks appended, %llu released, %llu still queued", r->id,
         (unsigned long long)s->calls, s->fmin, s->fmax, (double)s->qsum / s->count, (unsigned long long)s->count,
-        (unsigned long long)s->underruns, s->zero_bytes / (2.0 * r->ch) / (RATE / 1000.0));
+        (unsigned long long)s->underruns, s->zero_bytes / (2.0 * r->ch) / (RATE / 1000.0),
+        (unsigned long long)s->appended, (unsigned long long)s->released,
+        (unsigned long long)(s->appended - s->released));
 }
 static void stats_drain(void) {
     audio_report reports[AOMAX]; int n = 0;
@@ -578,7 +584,7 @@ HLE_FORCE("_ZN2nn5audio20AppendAudioOutBufferEPNS0_8AudioOutEPNS0_14AudioOutBuff
     uint32_t qt = atomic_load_explicit(&a->q_tail, memory_order_relaxed);
     uint32_t qh = atomic_load_explicit(&a->q_head, memory_order_acquire);
     int ok = qt - qh < QMAX;
-    if (ok) { a->q[qt & (QMAX - 1)] = b; atomic_store_explicit(&a->q_tail, qt + 1, memory_order_release); }
+    if (ok) { a->q[qt & (QMAX - 1)] = b; atomic_store_explicit(&a->q_tail, qt + 1, memory_order_release); atomic_fetch_add_explicit(&a->appended, 1, memory_order_relaxed); }
     pthread_mutex_unlock(&a->m);
     return ok;      // bool: false when the queue is full (the real device has a limit too)
 }
