@@ -363,21 +363,6 @@ static int capture(ar_t *a, const uint8_t *cl, size_t len, int16_t *dst) {
         if (!cmd_ok(c, cend)) { if (!logged++) LOG("[RED] audren: command %u in the command list is malformed (offset %#zx, list %#zx bytes)", i, (size_t)(c - cl), len); return 0; }
         c += cmd_size(c);
     }
-    // Once a second, the commands that are enabled, by ID: a voice the game starts shows up here and a game that stops submitting one does not
-    if (ncmd > 4) {
-        int en[64] = {0}; int any = 0; const uint8_t *q = cl + 0x20;
-        for (uint32_t i = 0; i < ncmd; i++) { if (cmd_on(q)) { en[cmd_id(q) & 63]++; any = 1; } q += cmd_size(q); }
-        uint64_t f = atomic_load(&a->frames);
-        if (any && f && f % 200 == 0) {
-            char line[256] = {0}; size_t o = 0;
-            for (int k = 0; k < 64; k++) if (en[k]) {
-                int w = snprintf(line + o, sizeof line - o, " %d×%d", k, en[k]);
-                if (w < 0 || (size_t)w >= sizeof line - o) { line[o] = 0; break; }
-                o += (size_t)w;
-            }
-            LOG("audren: renderer %d frame %llu enabled commands:%s", ar_index(a), (unsigned long long)f, line);
-        }
-    }
     if (!hist_logged && ncmd > 4) {   // first full command list: command ID histogram and the sink ID check
         hist_logged = 1;
         int hist[64] = {0}, cand = -1, ncand = 0, cand4 = -1, ncand4 = 0, sink_sz = 0x148 + sink_body(); const uint8_t *q = cl + 0x20; char line[512] = {0}; size_t o = 0;
