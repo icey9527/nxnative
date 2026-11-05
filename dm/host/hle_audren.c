@@ -20,6 +20,8 @@
 #include <unistd.h>
 
 void *dm_guest_thread_spawn(void (*fn)(void *), void *arg, int prio, size_t stack_size);
+
+static _Atomic float g_dev_vol = 1.0f;   // SetAudioDeviceOutputVolume: the device volume the game set, a gain on the renderer's output
 void dm_guest_thread_join(void *tt);
 void *dm_pcmout_open(int ch);
 void dm_pcmout_close(void *k);
@@ -94,7 +96,7 @@ typedef struct {
     _Atomic int open;
     void *render_tt;                         // the render thread (ThreadType from dm_guest_thread_spawn): Close joins it before the SDK tears the renderer down
     int16_t frame[FRAME_MAX * 2]; int frame_n;   // the latest frame (stereo int16)
-    _Atomic uint64_t frames, nonsilent, updates, renders, catchups;
+    _Atomic uint64_t frames, nonsilent, updates, renders, catchups, clipped;   // clipped: samples the int16 conversion had to saturate
     uint64_t last_r; int updated;            // the render count at the last update, once there was one
     int16_t cq[CQ][FRAME_MAX * 2]; int cq_n[CQ]; _Atomic uint32_t cq_head, cq_tail;   // output queue of catch-up frames
     pthread_mutex_t cq_mu; pthread_cond_t cq_cv;   // the render thread signals each frame it takes off the queue (catch-up pacing)
@@ -405,13 +407,16 @@ static int capture(ar_t *a, const uint8_t *cl, size_t len, int16_t *dst) {
                 st[2 * s] = l; st[2 * s + 1] = r;
             }
             uint32_t nout = rate == 48000 ? samples : up_3_2(a, st, samples, st);
-            uint64_t loud = 0;
+            // The device volume the game set (SetAudioDeviceOutputVolume) is the system's volume on the Switch; the host has no way to set iOS's, so it is a gain here, as the audout session applies it
+            float dv = atomic_load_explicit(&g_dev_vol, memory_order_relaxed);
+            uint64_t loud = 0; uint32_t clamped = 0;
             for (uint32_t s = 0; s < 2 * nout; s++) {
-                int32_t v = st[s]; v = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+                int32_t v = dv != 1.0f ? (int32_t)(st[s] * dv) : st[s];
+                if (v > 32767) { v = 32767; clamped++; } else if (v < -32768) { v = -32768; clamped++; }
                 dst[s] = (int16_t)v; loud |= (uint64_t)v;
             }
-            atomic_fetch_add(&a->frames, 1); if (loud) atomic_fetch_add(&a->nonsilent, 1);
-            uint64_t f = atomic_load(&a->frames); if (f == 200 || f % 12000 == 0) LOG("audren: renderer %d rendered %llu frames, %llu of them not silent", ar_index(a), (unsigned long long)f, (unsigned long long)atomic_load(&a->nonsilent));
+            atomic_fetch_add(&a->frames, 1); if (loud) atomic_fetch_add(&a->nonsilent, 1); if (clamped) atomic_fetch_add(&a->clipped, clamped);
+            uint64_t f = atomic_load(&a->frames); if (f == 200 || f % 12000 == 0) LOG("audren: renderer %d rendered %llu frames, %llu of them not silent, %llu samples saturated", ar_index(a), (unsigned long long)f, (unsigned long long)atomic_load(&a->nonsilent), (unsigned long long)atomic_load(&a->clipped));
             return (int)nout;
         }
         c += size;
@@ -578,9 +583,15 @@ HLE_FORCE("_ZN2nn5audio30GetActiveAudioOutputDeviceNameEPNS0_15AudioDeviceNameE"
 HLE_FORCE("_ZN2nn5audio19ListAudioDeviceNameEPNS0_15AudioDeviceNameEi", "output device list (SDK 12 name): 1 built-in speaker", int, h_ad_List12, char *names, int n) { return h_ad_List(names, n); }
 HLE_FORCE("_ZN2nn5audio24GetActiveAudioDeviceNameEPNS0_15AudioDeviceNameE", "active output device (SDK 12 name): built-in speaker", void, h_ad_Active12, char *name) { out_devname(name); }
 HLE_FORCE("_ZN2nn5audio41GetActiveAudioDeviceChannelCountForOutputEv", "output channel count: 2", int, h_ad_Channels, void) { return 2; }
-// Device volume: kept and read back (DRAGON QUEST VII Reimagined reads it at boot, main+0xee8edc), not applied: the host's output has the system's own volume
-static _Atomic float g_dev_vol = 1.0f;
-HLE_FORCE("_ZN2nn5audio26SetAudioDeviceOutputVolumeEPKNS0_15AudioDeviceNameEf", "device volume; kept for the getter, not applied by the host", void, h_ad_SetVol, const char *name, float v) { (void)name; atomic_store(&g_dev_vol, v); }
+// Device volume: kept, read back (DRAGON QUEST VII Reimagined reads it at boot, main+0xee8edc) and applied as a gain on the renderer's output: on the Switch it is the system's volume,
+// which iOS only lets the player change; without it a game that turns its volume down still played at full scale and saturated the int16 conversion
+HLE_FORCE("_ZN2nn5audio26SetAudioDeviceOutputVolumeEPKNS0_15AudioDeviceNameEf", "device volume; a gain on the renderer's output (iOS's own volume cannot be set from the app)", void, h_ad_SetVol, const char *name, float v) {
+    (void)name;
+    float old = atomic_load(&g_dev_vol);
+    if (old == v) return;
+    atomic_store(&g_dev_vol, v);
+    LOG("audio: device output volume %g (a gain on the renderer's output)", v);
+}
 HLE_FORCE("_ZN2nn5audio26GetAudioDeviceOutputVolumeEPKNS0_15AudioDeviceNameE", "device volume: what the game last set (1.0 at start)", float, h_ad_GetVol, const char *name) { (void)name; return atomic_load(&g_dev_vol); }
 // Output volume auto-tune (Switch 2 SDKs, through the audio device service the host does not serve; Donkey Kong Bananza reads it at boot, main+0x57dc7c): kept and read back, off at start
 static atomic_uchar g_dev_autotune;
