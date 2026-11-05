@@ -120,8 +120,15 @@ HLE_FORCE("_ZN2nn5codec47GetHardwareOpusMultiStreamDecoderProcessingTimeEPKNS0_3
 #define OPUS_MAX_PCM (960 * 2 * 2 * 3)         // a frame of up to 60 ms, stereo, 16-bit
 typedef struct opus_req { struct opus_req *next; size_t n; int samples; uint8_t data[]; } opus_req;   // a waiting packet, then (decoded) its PCM
 typedef struct opus_mgr opus_mgr;
-typedef struct { opus_mgr *m; void *soft; void *work; int ch; opus_req *wait, *wait_tail, *done, *done_tail; int nwait, ndone; } opus_dec;
+typedef struct opus_dec opus_dec;
+struct opus_dec { opus_mgr *m; void *soft; void *work; int ch; opus_req *wait, *wait_tail, *done, *done_tail; int nwait, ndone; const void *guest; opus_dec *registry_next; };
 struct opus_mgr { pthread_mutex_t lock; void *event; int io_total, io_used, ndec, cap; opus_dec **dec; };
+static pthread_mutex_t g_opus_dec_registry_lock = PTHREAD_MUTEX_INITIALIZER;
+static opus_dec *g_opus_dec_registry;
+static opus_dec *opus_mgr_dec_registered(const void *gd) {
+    for (opus_dec *d = g_opus_dec_registry; d; d = d->registry_next) if (d->guest == gd) return d;
+    return NULL;
+}
 
 typedef struct { uint64_t seq, tid; const char *event; uintptr_t guest, m, d, dec; int ndec, cap, has_state; } opus_trace_entry;
 enum { OPUS_TRACE_N = 32 };
@@ -209,7 +216,13 @@ HLE_FORCE("_ZN2nn5codec29InitializeHardwareOpusDecoderEPNS0_23HardwareOpusDecode
     m->dec[m->ndec++] = d;
     opus_trace_record("dec_init_append", gd, m, d, m->ndec, m->cap, m->dec, 1);
     pthread_mutex_unlock(&m->lock);
+    pthread_mutex_lock(&g_opus_dec_registry_lock);
+    if (opus_mgr_dec_registered(gd)) die("Opus decoder %p is already registered with a manager", gd);
+    d->guest = gd;
+    d->registry_next = g_opus_dec_registry;
     objmap_put(gd, d);
+    g_opus_dec_registry = d;
+    pthread_mutex_unlock(&g_opus_dec_registry_lock);
     opus_trace_record("dec_init_map", gd, m, d, 0, 0, NULL, 0);
     return 0;
 }
@@ -218,12 +231,18 @@ static void opus_dec_clear(opus_dec *d) {   // under the manager's lock: every r
     opus_free_list(d->wait); opus_free_list(d->done);
     d->wait = d->wait_tail = d->done = d->done_tail = NULL; d->nwait = d->ndone = 0;
 }
-// FinalizeHardwareOpusDecoder and ResetHardwareOpusDecoder are the hooks above (the older C interface): both find this decoder through objmap first
+// FinalizeHardwareOpusDecoder and ResetHardwareOpusDecoder are the hooks above (the older C interface): the manager form is identified by this registry, not the shared objmap payload
 static int opus_mgr_dec_fini(void *gd) {
-    opus_dec *d = objmap_get(gd);
-    if (!d || !d->work) return 0;   // the older interface's state has no work buffer of its own
+    pthread_mutex_lock(&g_opus_dec_registry_lock);
+    opus_dec **link = &g_opus_dec_registry;
+    while (*link && (*link)->guest != gd) link = &(*link)->registry_next;
+    opus_dec *d = *link;
+    if (!d) { pthread_mutex_unlock(&g_opus_dec_registry_lock); return 0; }
+    *link = d->registry_next;
+    d->registry_next = NULL;
     opus_trace_record("dec_fini_lookup", gd, NULL, d, 0, 0, NULL, 0);
-    void *removed = objmap_del(gd);
+    void *mapped = objmap_get(gd);
+    void *removed = mapped == d ? objmap_del(gd) : NULL;
     opus_trace_record(removed == d ? "dec_fini_unmap" : "dec_fini_unmap_miss", gd, NULL, d, 0, 0, NULL, 0);
     void (*fini)(void *) = opus_fn("_ZN2nn5codec19FinalizeOpusDecoderEPNS0_15OpusDecoderTypeE");
     opus_mgr *m = d->m;
@@ -240,14 +259,18 @@ static int opus_mgr_dec_fini(void *gd) {
     fini(d->soft);
     opus_trace_record("dec_fini_release", gd, NULL, d, 0, 0, NULL, 0);
     free(d->soft); free(d->work); free(d);
+    pthread_mutex_unlock(&g_opus_dec_registry_lock);
     return 1;
 }
 static int opus_mgr_dec_reset(void *gd) {
-    opus_dec *d = objmap_get(gd); if (!d || !d->work) return 0;
+    pthread_mutex_lock(&g_opus_dec_registry_lock);
+    opus_dec *d = opus_mgr_dec_registered(gd);
+    if (!d) { pthread_mutex_unlock(&g_opus_dec_registry_lock); return 0; }
     void (*reset)(void *) = opus_fn("_ZN2nn5codec16ResetOpusDecoderEPNS0_15OpusDecoderTypeE");
     if (d->m) pthread_mutex_lock(&d->m->lock);
     opus_dec_clear(d); reset(d->soft);
     if (d->m) pthread_mutex_unlock(&d->m->lock);
+    pthread_mutex_unlock(&g_opus_dec_registry_lock);
     return 1;
 }
 HLE_FORCE("_ZN2nn5codec36EnqueueOpusDataToHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeEPmPKvm", "hwopus service; queued for ExecuteHardwareOpusDecoderDecoding", int, h_codec_HwOpusEnqueue,
