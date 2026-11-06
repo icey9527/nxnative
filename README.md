@@ -1,15 +1,16 @@
-# nxnative — iOS 15.6 / iOS 16 / iOS 17 compatibility
+# nxnative — iOS 15.5 / 15.6 / 16 / 17 compatibility
 
 
-> **This branch — `ios15.6` — is the build branch for iOS 15.6 devices.**
+> **This branch — `ios15.6` — is the build branch for iOS 15.5 and 15.6 devices.**
 > It is `ios16-ios17-compat` with `seedds/nxnative` main merged in, and it carries
 > the iOS 15.6 adaptation (legacy Metal, AIR 2.4) as a commit rather than as a patch.
-> The deployment target is 15.6 and the app is built with the legacy renderer.
+> The deployment target is 15.5 and the app is built with the legacy renderer; it is
+> verified on iPadOS 15.6 (15.5 compiles and links, no device available to run it).
 > Builds pin a commit id, not this branch, so the branch may move without changing
 > what a given build contains.
 > Built and run on an iPad Pro (M1) with iPadOS 15.6. Per-game results belong in
 > `docs/fork-status.md`; add the device and OS version with each entry.
-**Nintendo Switch native execution for iPhone and iPad, including a legacy Metal backend for iPadOS 15.6, 16 and 17.** This is [widmonstertony's compatibility fork](https://github.com/widmonstertony/nxnative), maintained on **[`ios16-ios17-compat`](https://github.com/widmonstertony/nxnative/tree/ios16-ios17-compat)**. It also retains the modern Metal 4 target for supported devices on iOS 26 or later.
+**Nintendo Switch native execution for iPhone and iPad, including a legacy Metal backend for iPadOS 15.5, 15.6, 16 and 17.** This is [widmonstertony's compatibility fork](https://github.com/widmonstertony/nxnative), maintained on **[`ios16-ios17-compat`](https://github.com/widmonstertony/nxnative/tree/ios16-ios17-compat)**. It also retains the modern Metal 4 target for supported devices on iOS 26 or later.
 
 Start with the **[iOS 16 / iOS 17 build and installation guide](docs/ios16-ios17.md)** and the **[device compatibility status](docs/fork-status.md)**. An older OS build target does not make every game compatible with every older GPU. The upstream gallery below includes Mac results and is not an iOS 16/17 compatibility list.
 
