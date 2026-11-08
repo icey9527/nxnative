@@ -46,6 +46,8 @@ int front_text_input(const char *title, const char *sub, const char *guide, cons
 // Early start of host loading (main.c): reading the NSO / relocation / forced takeover / prefetch start are moved to a background thread, in parallel with the front end (UIKit launch chain, Metal view);
 // the dm_main / main called afterwards waits for it to finish. For call timing and preconditions see the comments in main.c (set DM_ROMFS and the other environment variables and the cwd first; arguments identical item by item to those of the later main).
 void dm_host_preload_start(int argc, char **argv);
+// DM_THREAD_DUMP=<n>: every guest thread's wait object and last SVC, n times, 3 s apart. Call once the environment is final (after the env files); a no-op without the variable
+void dm_thread_dump_start(void);
 // iOS: names the loaded image that carries the game's embedded module sections (loader.c map_image, nro_pieces), for an app that links them into a framework it dlopens from its signed bundle.
 // Set it before dm_host_preload_start, once: the loader reads it on the preload thread and at every later NRO load. Not set, they are read from the executable
 
