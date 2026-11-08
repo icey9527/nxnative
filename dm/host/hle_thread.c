@@ -1091,7 +1091,14 @@ static int svc_thread_impl(int num, uint64_t *regs) {
         int ok = type == 3 ? ld64(addr) == regs[2] : type == 2 ? (int32_t)v == val : (int32_t)v < val;
         if (ok && type == 1) { while (!cas32(addr, &v, v - 1)) if (!((int32_t)v < val)) { ok = 0; break; } }
         if (!ok) r = R_BAD_STATE;
-        else { t->waddr = addr; r = block(t, 3, poll_wait_begin((int64_t)regs[3])); }
+        else {
+            // DM_FUTEX_WAIT0_INFINITE: a zero timeout blocks instead of returning at once. A thread that calls this millions of times a second
+            // (a game polling a lock another thread holds) is asking for the no-timeout form of the API; without the switch this stays a poll.
+            static int w0 = -1; if (w0 < 0) w0 = getenv("DM_FUTEX_WAIT0_INFINITE") ? 1 : 0;
+            int64_t to = (int64_t)regs[3];
+            if (to == 0 && w0) to = -1;
+            t->waddr = addr; r = block(t, 3, poll_wait_begin(to));
+        }
         pthread_mutex_unlock(&G);
         if (ok) poll_wait_end((int64_t)regs[3], r);
         // DM_FUTEX_LOG: what this thread waits on, and whether the condition ever held. The
