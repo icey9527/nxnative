@@ -210,7 +210,6 @@ HLE_FORCE("_ZN2nn5codec29InitializeHardwareOpusDecoderEPNS0_23HardwareOpusDecode
     int r = init(d->soft, rate, ch, d->work, ws);
     if (r) { free(d->work); free(d->soft); free(d); return r; }
     d->m = m; d->ch = ch;
-    { static int ninited; if (ninited++ < 8) LOG("codec: manager Opus decoder %p created (%d Hz, %d ch)", gd, rate, ch); }
     opus_trace_record("dec_init_enter", gd, m, d, 0, 0, NULL, 0);
     pthread_mutex_lock(&m->lock);
     if (m->ndec == m->cap) { m->cap *= 2; opus_dec **dec = realloc(m->dec, (size_t)m->cap * sizeof *m->dec); if (!dec) die("Opus manager realloc"); m->dec = dec; }
